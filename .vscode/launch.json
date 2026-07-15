@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:tack}",
+      "name": "Debug swift-executable",
+      "target": "swift-executable",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug swift-executable"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:tack}",
+      "name": "Release swift-executable",
+      "target": "swift-executable",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release swift-executable"
+    }
+  ]
+}
