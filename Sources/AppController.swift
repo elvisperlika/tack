@@ -18,16 +18,12 @@ enum Main {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let note = NoteWindow()
     private var statusItem: NSStatusItem!
-    private var pollTimer: Timer?  // slow: which window is focused (~0.4s)
-    private var trackTimer: Timer?  // fast: glue the note to the Finder window (60fps)
-    private var appTracker: AXWindowTracker?  // app windows follow via AX notifications, not polling
+    private var pollTimer: Timer?  // slow: which surface is focused (~0.4s)
+    private var trackTimer: Timer?  // fast: glue the note to the window (60fps), only when
+    private var tracker: AnyObject?  // the container can't push moves itself
 
-    /// What a note is bound to.
-    private enum Target: Equatable {
-        case folder(path: String)  // Finder folder → .tack.json in the folder
-        case appWindow(key: String, pid: pid_t)  // any other app window → central store
-    }
-    private var current: Target?
+    private var current: Container?
+    private var currentLevel = 0  // the level the shown note was found at — edits save back here
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -51,114 +47,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Target resolution
 
-    /// The window the user is focused on right now (or `current` while we're editing our own note).
-    private func resolve() -> Target? {
+    /// The surface the user is focused on right now (or `current` while we're editing our own
+    /// note, which would otherwise resolve to Tack itself).
+    private func resolve() -> Container? {
         guard let front = NSWorkspace.shared.frontmostApplication else { return current }
-        if front.bundleIdentifier == Bundle.main.bundleIdentifier { return current }  // our note is key: keep
-        if front.bundleIdentifier == "com.apple.finder" {
-            guard let state = FinderWatcher.current() else { return nil }
-            return .folder(path: state.path)
-        }
-        guard let info = AXWindows.focused(of: front) else { return nil }
-        return .appWindow(key: info.key, pid: front.processIdentifier)
-    }
-
-    private func bounds(for target: Target) -> CGRect? {
-        switch target {
-        case .folder: return FinderWatcher.frontFinderWindow()?.bounds
-        case .appWindow(_, let pid): return AXWindows.focusedBounds(pid: pid)
-        }
-    }
-
-    private func load(_ target: Target) -> Note? {
-        switch target {
-        case .folder(let path): return NoteStore.load(folder: path)
-        case .appWindow(let key, _): return AppNotes.load(key: key)
-        }
-    }
-
-    private func saver(for target: Target) -> (Note) -> Void {
-        switch target {
-        case .folder(let path): return { NoteStore.save(folder: path, note: $0) }
-        case .appWindow(let key, _): return { AppNotes.save(key: key, note: $0) }
-        }
+        if front.bundleIdentifier == Bundle.main.bundleIdentifier { return current }
+        return Container.resolve(front: front)
     }
 
     // MARK: - Loops
 
     private func pollTarget() {
-        guard let target = resolve() else {
+        guard let container = resolve() else {
             hideNote()
             current = nil
             return
         }
-        guard target != current else { return }
-        current = target
-        if let n = load(target), let b = bounds(for: target) {
-            showNote(n, bounds: b, save: saver(for: target))
-            startAppTracking(target)
+        // Container is a class, so identity is the path, not the object.
+        guard container.path != current?.path else { return }
+        current = container
+        if let hit = container.load(), let f = container.frame() {
+            currentLevel = hit.level
+            showNote(hit.note, frame: f, container: container)
         } else {
             hideNote()
         }
     }
 
     private func trackTarget() {
-        guard let target = current else { return }
-        switch target {
-        case .folder:
-            guard let info = FinderWatcher.frontFinderWindow() else { return }
-            note.updateWindow(bounds: info.bounds)
-            note.setOccluded(
-                info.coveringRects.contains { $0.intersects(note.screenRectTopLeft()) })
-        case .appWindow(_, let pid):
-            guard appTracker == nil else { return }  // AX notifications drive it; poll only as fallback
-            guard let b = AXWindows.focusedBounds(pid: pid) else { return }
-            note.updateWindow(bounds: b)
-            note.setOccluded(false)  // a focused app window is already on top
-        }
+        guard let f = current?.frame() else { return }
+        apply(f)
     }
 
-    /// App windows glide via AX move/resize notifications instead of 60fps polling.
-    private func startAppTracking(_ target: Target) {
-        appTracker = nil
-        guard case let .appWindow(_, pid) = target, let win = AXWindows.focusedWindow(pid: pid)
-        else { return }
-        appTracker = AXWindowTracker(pid: pid, window: win) { [weak self] b in
-            self?.note.updateWindow(bounds: b)
-            self?.note.setOccluded(false)
+    /// The one place the note follows its window. Containers that can't be covered report no
+    /// occluders, so the same two lines serve Finder and app windows alike.
+    private func apply(_ f: Frame) {
+        note.updateWindow(bounds: f.bounds)
+        note.setOccluded(f.covering.contains { $0.intersects(note.screenRectTopLeft()) })
+    }
+
+    /// Prefer the container's own move events; fall back to the 60fps timer only if it has none.
+    private func startTracking(_ container: Container) {
+        tracker = container.tracker { [weak self] f in self?.apply(f) }
+        guard tracker == nil else {
+            trackTimer?.invalidate()
+            trackTimer = nil
+            return
+        }
+        guard trackTimer == nil else { return }
+        trackTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) {
+            [weak self] _ in
+            self?.trackTarget()
         }
     }
 
     // MARK: - Show / hide
 
-    private func showNote(_ n: Note, bounds b: CGRect, save: @escaping (Note) -> Void) {
-        note.show(note: n, bounds: b, save: save)
-        if trackTimer == nil {
-            trackTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) {
-                [weak self] _ in
-                self?.trackTarget()
-            }
+    private func showNote(_ n: Note, frame f: Frame, container: Container) {
+        note.show(note: n, bounds: f.bounds) { [weak self] edited in
+            guard let self else { return }
+            container.write(edited, at: self.currentLevel)  // read late: promotion moves it
         }
+        apply(f)
+        startTracking(container)
     }
 
     private func hideNote() {
         note.hide()
         stopTracking()
     }
+
     private func stopTracking() {
         trackTimer?.invalidate()
         trackTimer = nil
-        appTracker = nil
+        tracker = nil
     }
 
     // MARK: - Menu
 
     @objc private func addNote() {
-        guard let target = resolve(), let b = bounds(for: target) else { return }
-        current = target
-        showNote(
-            load(target) ?? Note(text: "", dx: 20, dy: 40), bounds: b, save: saver(for: target))
-        startAppTracking(target)
+        guard let container = resolve(), let f = container.frame() else { return }
+        current = container
+        let hit = container.load()
+        currentLevel = hit?.level ?? container.finestLevel  // finest available, promote later
+        showNote(hit?.note ?? Note(text: "", dx: 20, dy: 40), frame: f, container: container)
         NSApp.activate(ignoringOtherApps: true)
         note.focusForEditing()
     }
