@@ -102,12 +102,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch target {
         case .folder:
             guard let info = FinderWatcher.frontFinderWindow() else { return }
-            note.updateWindow(left: Double(info.bounds.minX), top: Double(info.bounds.minY))
+            note.updateWindow(bounds: info.bounds)
             note.setOccluded(info.coveringRects.contains { $0.intersects(note.screenRectTopLeft()) })
         case .appWindow(_, let pid):
             guard appTracker == nil else { return } // AX notifications drive it; poll only as fallback
             guard let b = AXWindows.focusedBounds(pid: pid) else { return }
-            note.updateWindow(left: Double(b.minX), top: Double(b.minY))
+            note.updateWindow(bounds: b)
             note.setOccluded(false) // a focused app window is already on top
         }
     }
@@ -117,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appTracker = nil
         guard case let .appWindow(_, pid) = target, let win = AXWindows.focusedWindow(pid: pid) else { return }
         appTracker = AXWindowTracker(pid: pid, window: win) { [weak self] b in
-            self?.note.updateWindow(left: Double(b.minX), top: Double(b.minY))
+            self?.note.updateWindow(bounds: b)
             self?.note.setOccluded(false)
         }
     }
@@ -125,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Show / hide
 
     private func showNote(_ n: Note, bounds b: CGRect, save: @escaping (Note) -> Void) {
-        note.show(note: n, left: Double(b.minX), top: Double(b.minY), save: save)
+        note.show(note: n, bounds: b, save: save)
         if trackTimer == nil {
             trackTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
                 self?.trackTarget()

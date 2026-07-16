@@ -6,6 +6,13 @@ enum Coord {
     static func cocoaTopLeft(finderLeft: Double, finderTop: Double, dx: Double, dy: Double, primaryHeight: Double) -> NSPoint {
         NSPoint(x: finderLeft + dx, y: primaryHeight - (finderTop + dy))
     }
+
+    /// Holds the note inside the tracked window: the offset is clamped so the note's whole
+    /// rect stays within the window. A window smaller than the note pins it to the top-left.
+    static func clamp(dx: Double, dy: Double, note: CGSize, window: CGSize) -> (dx: Double, dy: Double) {
+        (min(max(0, dx), max(0, Double(window.width - note.width))),
+         min(max(0, dy), max(0, Double(window.height - note.height))))
+    }
 }
 
 enum Screens {
@@ -84,12 +91,14 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private var saveHandler: (Note) -> Void = { _ in } // where the current note persists
     private var finderLeft = 0.0
     private var finderTop = 0.0
+    private var windowSize = CGSize.zero // tracked window's size, so the note can't be dragged out of it
     private var dx = 20.0
     private var dy = 40.0
     private var isProgrammaticMove = false
     private var saveWork: DispatchWorkItem?
     private var active = false   // current folder has a note to show
     private var occluded = false // the note's spot on the Finder window is covered
+    private var shown = false    // what the last pop animated toward (the window stays visible while popping out)
 
     override init() {
         let w: CGFloat = 220, h: CGFloat = 170, strip: CGFloat = 28, radius: CGFloat = 12
@@ -265,12 +274,13 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     }
 
     /// Show `note`, positioned relative to the tracked window's top-left; `save` persists edits.
-    func show(note: Note, left: Double, top: Double, save: @escaping (Note) -> Void) {
+    func show(note: Note, bounds: CGRect, save: @escaping (Note) -> Void) {
         self.saveHandler = save
         self.dx = note.dx
         self.dy = note.dy
-        self.finderLeft = left
-        self.finderTop = top
+        self.finderLeft = Double(bounds.minX)
+        self.finderTop = Double(bounds.minY)
+        self.windowSize = bounds.size
         active = true
         occluded = false // re-evaluated on the next tracking frame
         colorHex = note.color ?? Swatch.defaultHex
@@ -279,7 +289,10 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         colorButton.image = swatchImage(hex: colorHex)
         textView.string = note.text // programmatic set does not fire textDidChange
         applyPosition()
-        applyVisibility()
+        // Switching between two notes reuses this one window, so pop unconditionally rather than
+        // going through applyVisibility — otherwise the incoming note would just teleport in.
+        shown = true
+        popIn()
     }
 
     /// Hide when another window covers the note's spot on the Finder window (and vice versa).
@@ -297,18 +310,59 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
 
     private func applyVisibility() {
         let visible = active && !occluded
-        if visible && !window.isVisible {
-            window.orderFront(nil)
-        } else if !visible && window.isVisible {
-            window.orderOut(nil)
+        guard visible != shown else { return } // already going the right way
+        shown = visible
+        if visible { popIn() } else { popOut() }
+    }
+
+    // MARK: - Pop animation
+
+    private static let popDuration = 0.16
+
+    /// Scales the card about its centre. The window frame is left alone — the 60fps tracker owns
+    /// it, and animating the frame would fight it — so the pop lives on the content layer instead.
+    private func popScale(from: Double, to: Double, curve: CAMediaTimingFunctionName) {
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = from
+        scale.toValue = to
+        scale.duration = Self.popDuration
+        scale.timingFunction = CAMediaTimingFunction(name: curve)
+        scale.fillMode = .forwards
+        scale.isRemovedOnCompletion = false
+        window.contentView?.layer?.add(scale, forKey: "pop")
+    }
+
+    private func popIn() {
+        window.alphaValue = 0
+        window.orderFront(nil)
+        popScale(from: 0.85, to: 1, curve: .easeOut)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = Self.popDuration
+            window.animator().alphaValue = 1
         }
     }
 
-    /// The tracked window moved — keep the offset, reposition. No-op if unchanged.
-    func updateWindow(left: Double, top: Double) {
-        guard left != finderLeft || top != finderTop else { return }
+    private func popOut() {
+        popScale(from: 1, to: 0.9, curve: .easeIn)
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = Self.popDuration
+            window.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self, !self.shown else { return } // popped back in mid-fade: leave it alone
+            self.window.orderOut(nil)
+            self.window.contentView?.layer?.removeAnimation(forKey: "pop")
+            self.window.alphaValue = 1
+        })
+    }
+
+    /// The tracked window moved or resized — keep the offset, reposition. No-op if unchanged.
+    /// A resize re-clamps, so shrinking the window pulls the note back inside with it.
+    func updateWindow(bounds: CGRect) {
+        let (left, top) = (Double(bounds.minX), Double(bounds.minY))
+        guard left != finderLeft || top != finderTop || bounds.size != windowSize else { return }
         finderLeft = left
         finderTop = top
+        windowSize = bounds.size
         applyPosition()
     }
 
@@ -323,19 +377,26 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     }
 
     private func applyPosition() {
+        let c = Coord.clamp(dx: dx, dy: dy, note: window.frame.size, window: windowSize)
+        dx = c.dx
+        dy = c.dy
         isProgrammaticMove = true
         window.setFrameTopLeftPoint(Coord.cocoaTopLeft(finderLeft: finderLeft, finderTop: finderTop,
                                                         dx: dx, dy: dy, primaryHeight: Screens.primaryHeight()))
         isProgrammaticMove = false
     }
 
-    // User dragged the note: recompute the offset from the Finder window's top-left, then save.
+    // User dragged the note: recompute the offset from the Finder window's top-left, clamp it
+    // back inside the window, then save.
+    // ponytail: snapping back in windowDidMove rides AppKit's own drag loop; if it ever feels
+    // jittery at the border, take over the drag in the content view's mouseDragged instead.
     func windowDidMove(_ notification: Notification) {
         guard !isProgrammaticMove else { return }
         let f = window.frame
         let noteTopLeftY = Screens.primaryHeight() - Double(f.maxY) // Cocoa -> top-left screen coords
         dx = Double(f.minX) - finderLeft
         dy = noteTopLeftY - finderTop
+        applyPosition() // clamps dx/dy and snaps the note back if the drag left the window
         scheduleSave()
     }
 
