@@ -1,0 +1,72 @@
+import AppKit
+
+/// Where a tracked window is, and what's stacked above it. The two travel together because
+/// this is read at 60fps: splitting them would double the CGWindowList traversal per frame.
+struct Frame {
+    var bounds: CGRect  // top-left screen coords, like Finder/CGWindow
+    var covering: [CGRect] = []  // normal windows sitting above it
+}
+
+/// The focused surface a note sticks to: an app, one of its windows, or one tab inside it.
+///
+/// Identity is a path, coarse → fine — ["com.apple.Preview", "Report.pdf"] — and the attach
+/// level is an index into it. Tack only ever cares about the focused surface, so there is no
+/// tree here: just the path to the current leaf.
+///
+/// Subclasses supply identity (`path`) and storage (`note(at:)` / `write(_:at:)`).
+class Container {
+    /// Identity, coarse → fine: [app, window, tab]. Only as deep as the app actually resolves.
+    var path: [String] { [] }
+
+    /// The coarsest level a note may attach at. Finder overrides this: its notes live in a
+    /// .tack.json inside the folder, so "a note on all of Finder" has no file to live in.
+    var minLevel: Int { 0 }
+
+    var finestLevel: Int { path.count - 1 }
+
+    /// The note key for a prefix of `path`. Pure, and the format is a compatibility
+    /// guarantee: at the finest level of a 2-part path it reproduces the pre-Container
+    /// key exactly, so existing appnotes.json files keep resolving.
+    static func key(path: [String], level: Int) -> String {
+        path.prefix(level + 1).joined(separator: "|")
+    }
+
+    func key(at level: Int) -> String { Self.key(path: path, level: level) }
+
+    // MARK: - Storage (subclass supplies)
+
+    func note(at level: Int) -> Note? { nil }
+    func write(_ note: Note, at level: Int) {}
+
+    // MARK: - Position (subclass supplies)
+
+    func frame() -> Frame? { nil }
+
+    /// Non-nil = this container pushes move events and the caller should not poll.
+    /// nil = the caller polls `frame()` instead.
+    func tracker(onMove: @escaping (Frame) -> Void) -> AnyObject? { nil }
+
+    // MARK: - Lookup
+
+    /// Finest → coarsest, first hit wins, reporting the level it hit at.
+    ///
+    /// This is why the level is never stored in the Note: it *is* whichever prefix the note
+    /// was written under. A window-level note is therefore found by every tab in that window
+    /// for free, and there's no chicken-and-egg where you'd need the level to build the key
+    /// to load the note that holds the level.
+    final func load() -> (note: Note, level: Int)? {
+        guard !path.isEmpty else { return nil }
+        for level in stride(from: finestLevel, through: minLevel, by: -1) {
+            if let n = note(at: level) { return (n, level) }
+        }
+        return nil
+    }
+
+    /// Promotion. Empty text is the delete convention in both stores, so this is
+    /// delete-at-the-old-key then write-at-the-new-one.
+    final func move(_ note: Note, from: Int, to: Int) {
+        guard from != to else { return }
+        write(Note(text: "", dx: note.dx, dy: note.dy, color: note.color), at: from)
+        write(note, at: to)
+    }
+}

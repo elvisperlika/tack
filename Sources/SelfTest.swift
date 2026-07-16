@@ -9,6 +9,9 @@ enum SelfTest {
         coordFlip()
         clampToWindow()
         colorHexRoundTrip()
+        containerKeys()
+        containerLoadFallback()
+        containerPromotion()
         print("✅ all self-tests passed")
     }
 
@@ -73,5 +76,63 @@ enum SelfTest {
         let p = Coord.cocoaTopLeft(
             finderLeft: 100, finderTop: 50, dx: 20, dy: 40, primaryHeight: 1000)
         assert(p.x == 120 && p.y == 910, "coord flip wrong: \(p)")
+    }
+}
+
+/// A Container with in-memory storage, so the lookup and promotion logic can be tested
+/// without an app, a window, or an Accessibility grant. This is the payoff of the class
+/// over the old enum.
+final class FakeContainer: Container {
+    private var storage: [String: Note] = [:]
+    private let ident: [String]
+
+    init(path: [String]) { self.ident = path }
+
+    override var path: [String] { ident }
+    override func note(at level: Int) -> Note? { storage[key(at: level)] }
+    override func write(_ note: Note, at level: Int) {
+        storage[key(at: level)] = note.text.isEmpty ? nil : note  // empty text == delete
+    }
+}
+
+extension SelfTest {
+    static func containerKeys() {
+        let p = ["com.foo.Bar", "doc.txt"]
+        assert(Container.key(path: p, level: 0) == "com.foo.Bar", "app level should be the bundle ID")
+
+        // The no-migration guarantee: identical to the old `bundle + "|" + ident` key
+        // (AXWindows.swift:25). If this fails, every existing app note is orphaned.
+        assert(Container.key(path: p, level: 1) == "com.foo.Bar|doc.txt", "key format changed")
+
+        assert(Container.key(path: ["a", "b", "c"], level: 1) == "a|b", "should join a prefix only")
+        assert(Container.key(path: ["a", "b", "c"], level: 2) == "a|b|c", "finest should join all")
+    }
+
+    static func containerLoadFallback() {
+        let c = FakeContainer(path: ["app", "win", "tab"])
+        let n = Note(text: "hi", dx: 1, dy: 2)
+
+        assert(c.load() == nil, "no note anywhere should not resolve")
+
+        c.write(n, at: 1)  // a window-level note
+        guard let hit = c.load() else {
+            assert(false, "a window note should be visible from the tab")
+            return
+        }
+        assert(hit.note == n && hit.level == 1, "should fall back to the window level: \(hit)")
+
+        c.write(Note(text: "tab", dx: 3, dy: 4), at: 2)
+        assert(c.load()?.level == 2, "the finest note wins when both exist")
+    }
+
+    static func containerPromotion() {
+        let c = FakeContainer(path: ["app", "win", "tab"])
+        let n = Note(text: "hi", dx: 1, dy: 2)
+        c.write(n, at: 2)
+
+        c.move(n, from: 2, to: 1)
+        assert(c.note(at: 2) == nil, "the old key should be gone after promotion")
+        assert(c.note(at: 1) == n, "the note should live at the window level now")
+        assert(c.load()?.level == 1, "and lookup should find it there")
     }
 }
