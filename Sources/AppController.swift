@@ -23,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var tracker: AnyObject?  // the container can't push moves itself
 
     private var current: Container?
-    private var currentLevel = 0  // the level the shown note was found at — edits save back here
+    private var currentBox: LevelBox?  // the level cell the shown note's save closure captures
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Tack", action: #selector(quit), keyEquivalent: "q"))
         menu.items.forEach { $0.target = self }
+        menu.delegate = self  // pin items are rebuilt per open, from the live path
         statusItem.menu = menu
 
         note.onDelete = { [weak self] in self?.stopTracking() }
@@ -75,8 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         current = container
         if let hit = container.load() {
-            currentLevel = hit.level
-            showNote(hit.note, frame: f, container: container)
+            showNote(hit.note, frame: f, container: container, level: hit.level)
         } else {
             hideNote()
         }
@@ -112,11 +112,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Show / hide
 
-    private func showNote(_ n: Note, frame f: Frame, container: Container) {
-        note.show(note: n, bounds: f.bounds) { [weak self] edited in
-            guard let self else { return }
-            container.write(edited, at: self.currentLevel)  // read late: promotion moves it
-        }
+    private func showNote(_ n: Note, frame f: Frame, container: Container, level: Int) {
+        let box = LevelBox(level)  // this note's own level cell — see LevelBox
+        currentBox = box
+        note.show(note: n, bounds: f.bounds) { edited in container.write(edited, at: box.value) }
         apply(f)
         startTracking(container)
     }
@@ -138,11 +137,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let container = resolve(), let f = container.frame() else { return }
         current = container
         let hit = container.load()
-        currentLevel = hit?.level ?? container.finestLevel  // finest available, promote later
-        showNote(hit?.note ?? Note(text: "", dx: 20, dy: 40), frame: f, container: container)
+        showNote(
+            hit?.note ?? Note(text: "", dx: 20, dy: 40), frame: f, container: container,
+            level: hit?.level ?? container.finestLevel)  // finest available, promote later
         NSApp.activate(ignoringOtherApps: true)
         note.focusForEditing()
     }
 
+    /// Move the current note to a coarser (or finer) level. Delete-then-write, so the note
+    /// never exists at two keys at once.
+    @objc private func pin(_ sender: NSMenuItem) {
+        guard let container = current, let hit = container.load() else { return }
+        container.move(hit.note, from: hit.level, to: sender.tag)
+        currentBox?.value = sender.tag  // redirect this note's later edits to the new level
+    }
+
     @objc private func quit() { NSApp.terminate(nil) }
+}
+
+/// The pin items depend on whatever is focused *right now*, so they're rebuilt each time the
+/// menu opens rather than stored.
+extension AppDelegate: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.items.filter { $0.tag != 0 || $0.action == #selector(pin(_:)) }
+            .forEach(menu.removeItem)
+
+        guard let container = current, let hit = container.load(),
+            container.finestLevel > container.minLevel  // nothing to choose between
+        else { return }
+
+        var index = 1  // just after "Add note here"
+        for level in container.minLevel...container.finestLevel {
+            let item = NSMenuItem(
+                title: LevelName.label(level: level, of: container.path.count),
+                action: #selector(pin(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = level
+            item.state = level == hit.level ? .on : .off
+            menu.insertItem(item, at: index)
+            index += 1
+        }
+        let sep = NSMenuItem.separator()
+        sep.tag = -1  // so the next rebuild removes it with the pin items
+        menu.insertItem(sep, at: index)
+    }
 }

@@ -14,6 +14,7 @@ enum SelfTest {
         containerPromotion()
         finderContainerRoundTrip()
         genericKeyMatchesLegacyFormat()
+        levelLabels()
         print("✅ all self-tests passed")
     }
 
@@ -170,5 +171,17 @@ extension SelfTest {
         assert(
             Container.key(path: ["com.foo.Bar", "Untitled 1"], level: 1) == legacy,
             "generic key drifted from the legacy format — existing notes would orphan")
+    }
+
+    static func levelLabels() {
+        // 3-part path (a browser tab): app / window / tab
+        assert(LevelName.label(level: 0, of: 3) == "Pin to this app", "level 0 is always the app")
+        assert(LevelName.label(level: 1, of: 3) == "Pin to this window", "middle is the window")
+        assert(LevelName.label(level: 2, of: 3) == "Pin to this tab", "deepest of 3 is the tab")
+
+        // 2-part path (a plain app window, or Preview where AXDocument already names the tab):
+        // the deepest level is the window itself, not a tab.
+        assert(LevelName.label(level: 0, of: 2) == "Pin to this app", "level 0 is always the app")
+        assert(LevelName.label(level: 1, of: 2) == "Pin to this window", "deepest of 2 is a window")
     }
 }

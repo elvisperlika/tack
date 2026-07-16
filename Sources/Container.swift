@@ -149,3 +149,22 @@ extension Container {
         return GenericAppContainer(app: front)
     }
 }
+
+/// Menu wording for an attach level. Pure so it can be tested without a menu.
+enum LevelName {
+    /// Level 0 is always the app. The deepest level of a 3-part path is a tab; everything
+    /// else is a window — a 2-part path bottoms out at the window, not a tab.
+    static func label(level: Int, of count: Int) -> String {
+        if level == 0 { return "Pin to this app" }
+        if count > 2 && level == count - 1 { return "Pin to this tab" }
+        return "Pin to this window"
+    }
+}
+
+/// The level a shown note saves to. A reference cell rather than a plain Int because
+/// NoteWindow debounces saves by 0.5s — longer than the 0.4s poll — so an in-flight save must
+/// land at the level its own note was shown at, even if focus has moved on since.
+final class LevelBox {
+    var value: Int
+    init(_ value: Int) { self.value = value }
+}
