@@ -11,6 +11,6 @@
     <key>CFBundleExecutable</key><string>Tack</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
-    <key>NSAppleEventsUsageDescription</key><string>Tack watches which folder is open in Finder to show its notes.</string>
+    <key>NSAppleEventsUsageDescription</key><string>Tack watches which folder is open in Finder and which tab is active in Terminal, to show the right note.</string>
 </dict>
 </plist>
