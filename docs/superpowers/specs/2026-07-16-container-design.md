@@ -29,7 +29,7 @@ Tack only ever cares about the *focused* surface. It never enumerates an app's o
 ```
 Finder folder    ["com.apple.finder", "/Users/me/Docs"]
 Preview tab      ["com.apple.Preview", "Report.pdf"]        // generic: AXDocument follows the tab
-Chrome tab       ["com.google.Chrome", "win:Inbox", "https://github.com/x/y"]
+Chrome tab       ["com.google.Chrome", "Inbox", "https://github.com/x/y"]
 Unknown app      ["com.foo.Bar", "Untitled 1"]
 ```
 
@@ -106,8 +106,10 @@ class Container {
 |---|---|---|---|
 | `FinderContainer` | `["com.apple.finder", folderPath]` | `.tack.json` in the folder | nil → 60fps poll (Finder pushes no move events) |
 | `GenericAppContainer` | `[bundleID, ident]` from `AXDocument ?? AXTitle` | `AppNotes` | `AXWindowTracker` |
-| `BrowserContainer` | `[bundleID, "win:" + title, normalizedURL]` | `AppNotes` | `AXWindowTracker` |
-| `TerminalContainer` | `[bundleID, "win:" + ident, "tty:" + tty]` | `AppNotes` | `AXWindowTracker` |
+| `BrowserContainer` | `[bundleID, ident, normalizedURL]` | `AppNotes` | `AXWindowTracker` |
+| `TerminalContainer` | `[bundleID, ident, tty]` | `AppNotes` | `AXWindowTracker` |
+
+The browser and terminal paths keep the plain `ident` as their second component rather than a prefixed variant, so their level-1 key stays byte-identical to the legacy format. Old title-keyed browser and Terminal notes then resolve as window-level notes instead of orphaning — a prefix would have bought readability and cost compatibility.
 
 `Container.resolve(front:)` replaces `AppController.resolve()` and picks the subclass by bundle ID, falling back to `GenericAppContainer`. It is the single place per-app rules live.
 
