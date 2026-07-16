@@ -58,16 +58,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Loops
 
     private func pollTarget() {
-        // An unresolvable surface — or one whose bounds we can't read yet — must leave `current`
-        // nil so the next poll retries. Latching it here would strand the note hidden until the
-        // user focused something else and came back.
-        guard let container = resolve(), let f = container.frame() else {
+        guard let container = resolve() else {
             hideNote()
             current = nil
             return
         }
-        // Container is a class, so identity is the path, not the object.
+        // Container is a class, so identity is the path, not the object. This guard comes first:
+        // an unchanged surface must cost nothing per poll, and must never hide a showing note.
         guard container.path != current?.path else { return }
+        // Don't latch a surface we can't place the note on — leaving `current` nil means the
+        // next poll retries, rather than stranding the note hidden until the user focuses away.
+        guard let f = container.frame() else {
+            hideNote()
+            current = nil
+            return
+        }
         current = container
         if let hit = container.load() {
             currentLevel = hit.level
