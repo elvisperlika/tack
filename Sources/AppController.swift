@@ -58,7 +58,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Loops
 
     private func pollTarget() {
-        guard let container = resolve() else {
+        // An unresolvable surface — or one whose bounds we can't read yet — must leave `current`
+        // nil so the next poll retries. Latching it here would strand the note hidden until the
+        // user focused something else and came back.
+        guard let container = resolve(), let f = container.frame() else {
             hideNote()
             current = nil
             return
@@ -66,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Container is a class, so identity is the path, not the object.
         guard container.path != current?.path else { return }
         current = container
-        if let hit = container.load(), let f = container.frame() {
+        if let hit = container.load() {
             currentLevel = hit.level
             showNote(hit.note, frame: f, container: container)
         } else {
@@ -88,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Prefer the container's own move events; fall back to the 60fps timer only if it has none.
     private func startTracking(_ container: Container) {
+        tracker = nil  // release the old observer before creating the next one
         tracker = container.tracker { [weak self] f in self?.apply(f) }
         guard tracker == nil else {
             trackTimer?.invalidate()
