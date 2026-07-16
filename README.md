@@ -2,6 +2,10 @@
 
 Sticky notes that stick to windows, not your desktop.
 
+![Tack in finder](example.gif)
+
+![Tack in other apps](example2.gif)
+
 Tack is a tiny macOS menu-bar app. Pin a note to a Finder folder or to any app window — the note follows the window as it moves, stays inside its bounds, and reappears when you come back to that window.
 
 - **Finder folders:** the note is saved as a hidden `.tack.json` *inside the folder*, so it travels with the folder when you move or copy it.
