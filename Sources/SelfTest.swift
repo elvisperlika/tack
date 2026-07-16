@@ -13,7 +13,7 @@ enum SelfTest {
     }
 
     static func appNotesRoundTrip() {
-        let key = "selftest|" + UUID().uuidString // unique: never clobbers a real note
+        let key = "selftest|" + UUID().uuidString  // unique: never clobbers a real note
         let n = Note(text: "hello", dx: 12, dy: 34)
         AppNotes.save(key: key, note: n)
         assert(AppNotes.load(key: key) == n, "app note round-trip mismatch")
@@ -23,8 +23,11 @@ enum SelfTest {
     }
 
     static func colorHexRoundTrip() {
-        assert(Swatch.hex(from: Swatch.color(fromHex: "FFEB73")) == "FFEB73", "hex round-trip failed")
-        assert(Swatch.hex(from: Swatch.color(fromHex: "bad")) == Swatch.defaultHex, "bad hex should fall back to default")
+        assert(
+            Swatch.hex(from: Swatch.color(fromHex: "FFEB73")) == "FFEB73", "hex round-trip failed")
+        assert(
+            Swatch.hex(from: Swatch.color(fromHex: "bad")) == Swatch.defaultHex,
+            "bad hex should fall back to default")
     }
 
     static func noteStoreRoundTrip() {
@@ -39,11 +42,14 @@ enum SelfTest {
 
         NoteStore.save(folder: folder, note: Note(text: "", dx: 12, dy: 34))
         assert(NoteStore.load(folder: folder) == nil, "empty text should delete the note")
-        assert(!FileManager.default.fileExists(atPath: NoteStore.fileURL(forFolder: folder).path), "file should be gone")
+        assert(
+            !FileManager.default.fileExists(atPath: NoteStore.fileURL(forFolder: folder).path),
+            "file should be gone")
     }
 
     static func clampToWindow() {
-        let note = CGSize(width: 220, height: 170), win = CGSize(width: 800, height: 600)
+        let note = CGSize(width: 220, height: 170)
+        let win = CGSize(width: 800, height: 600)
 
         // already inside -> untouched
         var c = Coord.clamp(dx: 100, dy: 50, note: note, window: win)
@@ -64,7 +70,8 @@ enum SelfTest {
 
     static func coordFlip() {
         // primary height 1000, window top-left (100,50), offset (20,40) -> note TL (120,90) -> Cocoa y 910
-        let p = Coord.cocoaTopLeft(finderLeft: 100, finderTop: 50, dx: 20, dy: 40, primaryHeight: 1000)
+        let p = Coord.cocoaTopLeft(
+            finderLeft: 100, finderTop: 50, dx: 20, dy: 40, primaryHeight: 1000)
         assert(p.x == 120 && p.y == 910, "coord flip wrong: \(p)")
     }
 }

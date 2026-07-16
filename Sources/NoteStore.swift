@@ -27,7 +27,7 @@ enum NoteStore {
     static func save(folder: String, note: Note) {
         let url = fileURL(forFolder: folder)
         if note.text.isEmpty {
-            try? FileManager.default.removeItem(at: url) // empty text == delete the note
+            try? FileManager.default.removeItem(at: url)  // empty text == delete the note
             return
         }
         guard let data = try? JSONEncoder().encode(note) else { return }
@@ -39,8 +39,10 @@ enum NoteStore {
 /// window identity string, since a generic app window has no folder to write into.
 enum AppNotes {
     private static let url: URL = {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Tack", isDirectory: true)
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[
+            0
+        ]
+        .appendingPathComponent("Tack", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("appnotes.json")
     }()
@@ -54,7 +56,7 @@ enum AppNotes {
 
     static func save(key: String, note: Note) {
         var dict = all()
-        dict[key] = note.text.isEmpty ? nil : note // empty text == delete
+        dict[key] = note.text.isEmpty ? nil : note  // empty text == delete
         guard let data = try? JSONEncoder().encode(dict) else { return }
         try? data.write(to: url)
     }
