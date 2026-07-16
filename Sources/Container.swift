@@ -137,6 +137,37 @@ class GenericAppContainer: Container {
     }
 }
 
+// MARK: - Browser
+
+/// A browser tab. The generic key can't tell one Chrome tab from another — they share a window
+/// identity that mutates as you switch — so the URL becomes the third path component.
+///
+/// Note the path keeps `ident` as its second component rather than a prefixed variant, so the
+/// level-1 key still matches the pre-Container format and old title-keyed browser notes resolve
+/// as window-level notes instead of orphaning.
+final class BrowserContainer: GenericAppContainer {
+    static let bundleIDs: Set<String> = ["com.google.Chrome", "com.apple.Safari"]
+    private let url: String?
+
+    override init?(app: NSRunningApplication) {
+        url = AXWindows.focusedURL(pid: app.processIdentifier).map(BrowserContainer.normalize)
+        super.init(app: app)
+    }
+
+    override var path: [String] {
+        guard let url, !url.isEmpty else { return [bundleID, ident] }  // no URL → window level
+        return [bundleID, ident, url]
+    }
+
+    /// scheme + host + path. Query and fragment are session noise.
+    static func normalize(_ raw: String) -> String {
+        guard var c = URLComponents(string: raw), c.host != nil else { return raw }
+        c.query = nil
+        c.fragment = nil
+        return c.url?.absoluteString ?? raw
+    }
+}
+
 // MARK: - Resolution
 
 extension Container {
@@ -145,6 +176,9 @@ extension Container {
         if front.bundleIdentifier == FinderContainer.bundleID {
             guard let state = FinderWatcher.current() else { return nil }
             return FinderContainer(folder: state.path)
+        }
+        if let id = front.bundleIdentifier, BrowserContainer.bundleIDs.contains(id) {
+            return BrowserContainer(app: front)
         }
         return GenericAppContainer(app: front)
     }

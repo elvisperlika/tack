@@ -65,6 +65,38 @@ enum AXWindows {
         else { return nil }
         return CGRect(origin: p, size: s)
     }
+
+    /// The URL of the focused window's web area. Chrome and Safari expose their full AX tree
+    /// once a trusted client is watching, which we are. nil → the caller binds to the window
+    /// instead of the tab. Called on the 0.4s poll only, never per frame.
+    static func focusedURL(pid: pid_t) -> String? {
+        guard let win = focusedWindow(pid: pid), let area = webArea(in: win, depth: 0),
+            let value = attribute(area, kAXURLAttribute)
+        else { return nil }
+        if let u = value as? URL { return u.absoluteString }
+        return value as? String
+    }
+
+    // ponytail: depth-limited DFS; the web area sits a few levels under the window. Depth 6
+    // covers Chrome and Safari today — raise it if a browser buries it deeper.
+    private static func webArea(in el: AXUIElement, depth: Int) -> AXUIElement? {
+        if depth > 6 { return nil }
+        if string(el, kAXRoleAttribute) == "AXWebArea" { return el }
+        guard let value = attribute(el, kAXChildrenAttribute), let kids = value as? [AXUIElement]
+        else { return nil }
+        for kid in kids {
+            if let hit = webArea(in: kid, depth: depth + 1) { return hit }
+        }
+        return nil
+    }
+
+    private static func attribute(_ el: AXUIElement, _ attr: String) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, attr as CFString, &value) == .success else {
+            return nil
+        }
+        return value
+    }
 }
 
 /// Follows one app window by AX move/resize notifications instead of 60fps polling, so the

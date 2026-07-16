@@ -15,6 +15,7 @@ enum SelfTest {
         finderContainerRoundTrip()
         genericKeyMatchesLegacyFormat()
         levelLabels()
+        urlNormalization()
         print("✅ all self-tests passed")
     }
 
@@ -183,5 +184,19 @@ extension SelfTest {
         // the deepest level is the window itself, not a tab.
         assert(LevelName.label(level: 0, of: 2) == "Pin to this app", "level 0 is always the app")
         assert(LevelName.label(level: 1, of: 2) == "Pin to this window", "deepest of 2 is a window")
+    }
+
+    static func urlNormalization() {
+        // Query and fragment are session noise; a note pinned to a page should survive them.
+        assert(
+            BrowserContainer.normalize("https://github.com/x/y?tab=readme#install")
+                == "https://github.com/x/y", "should strip query and fragment")
+        assert(
+            BrowserContainer.normalize("https://x.com/a") == "https://x.com/a",
+            "a clean URL should pass through untouched")
+
+        // Anything unparseable is used as-is rather than crashing or collapsing to "".
+        assert(BrowserContainer.normalize("notaurl") == "notaurl", "garbage should pass through")
+        assert(BrowserContainer.normalize("") == "", "empty should pass through")
     }
 }
