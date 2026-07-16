@@ -139,7 +139,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         closeButton = NSButton(frame: NSRect(x: w - 26, y: h - 24, width: 20, height: 20))
         closeButton.isBordered = false
         closeButton.imagePosition = .imageOnly
-        closeButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Delete note")
+        closeButton.image = NSImage(systemSymbolName: "trash.fill", accessibilityDescription: "Delete note")
         closeButton.contentTintColor = NSColor.black.withAlphaComponent(0.35)
         content.addSubview(closeButton)
 

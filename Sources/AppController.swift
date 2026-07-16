@@ -19,7 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let note = NoteWindow()
     private var statusItem: NSStatusItem!
     private var pollTimer: Timer?  // slow: which window is focused (~0.4s)
-    private var trackTimer: Timer? // fast: glue the note to the window (60fps)
+    private var trackTimer: Timer? // fast: glue the note to the Finder window (60fps)
+    private var appTracker: AXWindowTracker? // app windows follow via AX notifications, not polling
 
     /// What a note is bound to.
     private enum Target: Equatable {
@@ -90,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         current = target
         if let n = load(target), let b = bounds(for: target) {
             showNote(n, bounds: b, save: saver(for: target))
+            startAppTracking(target)
         } else {
             hideNote()
         }
@@ -103,9 +105,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             note.updateWindow(left: Double(info.bounds.minX), top: Double(info.bounds.minY))
             note.setOccluded(info.coveringRects.contains { $0.intersects(note.screenRectTopLeft()) })
         case .appWindow(_, let pid):
+            guard appTracker == nil else { return } // AX notifications drive it; poll only as fallback
             guard let b = AXWindows.focusedBounds(pid: pid) else { return }
             note.updateWindow(left: Double(b.minX), top: Double(b.minY))
             note.setOccluded(false) // a focused app window is already on top
+        }
+    }
+
+    /// App windows glide via AX move/resize notifications instead of 60fps polling.
+    private func startAppTracking(_ target: Target) {
+        appTracker = nil
+        guard case let .appWindow(_, pid) = target, let win = AXWindows.focusedWindow(pid: pid) else { return }
+        appTracker = AXWindowTracker(pid: pid, window: win) { [weak self] b in
+            self?.note.updateWindow(left: Double(b.minX), top: Double(b.minY))
+            self?.note.setOccluded(false)
         }
     }
 
@@ -121,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hideNote() { note.hide(); stopTracking() }
-    private func stopTracking() { trackTimer?.invalidate(); trackTimer = nil }
+    private func stopTracking() { trackTimer?.invalidate(); trackTimer = nil; appTracker = nil }
 
     // MARK: - Menu
 
@@ -129,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let target = resolve(), let b = bounds(for: target) else { return }
         current = target
         showNote(load(target) ?? Note(text: "", dx: 20, dy: 40), bounds: b, save: saver(for: target))
+        startAppTracking(target)
         NSApp.activate(ignoringOtherApps: true)
         note.focusForEditing()
     }
