@@ -75,6 +75,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         current = container
+        // ponytail: opt-in path logging for diagnosing identity. Enable with
+        //   defaults write com.tack.app debugPaths -bool YES
+        // then watch with: log stream --predicate 'process == "Tack"'
+        if UserDefaults.standard.bool(forKey: "debugPaths") {
+            NSLog("[tack] path=%@", container.path.joined(separator: " / "))
+        }
         if let hit = container.load() {
             showNote(hit.note, frame: f, container: container, level: hit.level)
         } else {
