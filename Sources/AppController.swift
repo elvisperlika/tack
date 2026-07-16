@@ -122,6 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func hideNote() {
         note.hide()
+        currentBox = nil  // the hidden note's level cell must not outlive it
         stopTracking()
     }
 
@@ -177,8 +178,5 @@ extension AppDelegate: NSMenuDelegate {
             menu.insertItem(item, at: index)
             index += 1
         }
-        let sep = NSMenuItem.separator()
-        sep.tag = -1  // so the next rebuild removes it with the pin items
-        menu.insertItem(sep, at: index)
     }
 }

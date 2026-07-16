@@ -436,6 +436,8 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private func scheduleSave() {
         saveWork?.cancel()
         let note = Note(text: textView.string, dx: dx, dy: dy, color: colorHex)
+        // snapshot: an in-flight save must use the handler — and level — of the note it was
+        // scheduled for, not whichever note is showing 0.5s later
         let save = saveHandler
         let work = DispatchWorkItem { save(note) }
         saveWork = work
