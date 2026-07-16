@@ -43,7 +43,7 @@ enum AXWindows {
         return (value as! AXUIElement)
     }
 
-    private static func string(_ el: AXUIElement, _ attr: String) -> String? {
+    static func string(_ el: AXUIElement, _ attr: String) -> String? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(el, attr as CFString, &value) == .success else {
             return nil

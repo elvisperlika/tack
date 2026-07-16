@@ -12,6 +12,8 @@ enum SelfTest {
         containerKeys()
         containerLoadFallback()
         containerPromotion()
+        finderContainerRoundTrip()
+        genericKeyMatchesLegacyFormat()
         print("✅ all self-tests passed")
     }
 
@@ -134,5 +136,39 @@ extension SelfTest {
         assert(c.note(at: 2) == nil, "the old key should be gone after promotion")
         assert(c.note(at: 1) == n, "the note should live at the window level now")
         assert(c.load()?.level == 1, "and lookup should find it there")
+    }
+
+    static func finderContainerRoundTrip() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let c = FinderContainer(folder: dir.path)
+        assert(c.path == ["com.apple.finder", dir.path], "finder path wrong: \(c.path)")
+
+        // A folder note can't be promoted: it lives in a .tack.json *inside* the folder,
+        // so level 0 ("all of Finder") would have no file to live in.
+        assert(c.minLevel == 1, "Finder should not offer promotion")
+        assert(c.finestLevel == 1, "finder path should be two components")
+
+        let n = Note(text: "hi", dx: 1, dy: 2)
+        c.write(n, at: 1)
+        guard let hit = c.load() else {
+            assert(false, "finder note should round-trip")
+            return
+        }
+        assert(hit.note == n && hit.level == 1, "finder round-trip mismatch: \(hit)")
+
+        c.write(Note(text: "", dx: 1, dy: 2), at: 1)
+        assert(c.load() == nil, "empty text should delete the folder note")
+    }
+
+    static func genericKeyMatchesLegacyFormat() {
+        // Belt and braces alongside containerKeys(): the generic container's finest key must
+        // be exactly what AXWindows.focused built before Container existed.
+        let legacy = "com.foo.Bar" + "|" + "Untitled 1"
+        assert(
+            Container.key(path: ["com.foo.Bar", "Untitled 1"], level: 1) == legacy,
+            "generic key drifted from the legacy format — existing notes would orphan")
     }
 }

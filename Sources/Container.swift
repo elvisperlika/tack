@@ -70,3 +70,82 @@ class Container {
         write(note, at: to)
     }
 }
+
+// MARK: - Finder
+
+/// A Finder folder. The note lives in a hidden .tack.json inside the folder itself, which is
+/// why it travels with the folder when you move or copy it — and why it can't be promoted.
+final class FinderContainer: Container {
+    static let bundleID = "com.apple.finder"
+    let folder: String
+
+    init(folder: String) { self.folder = folder }
+
+    override var path: [String] { [Self.bundleID, folder] }
+    override var minLevel: Int { 1 }
+
+    // ponytail: one level exists here, so `level` is always 1 and the folder is the key
+    override func note(at level: Int) -> Note? { NoteStore.load(folder: folder) }
+    override func write(_ note: Note, at level: Int) { NoteStore.save(folder: folder, note: note) }
+
+    /// Finder pushes no move events over Apple events, so `tracker` stays nil and the caller
+    /// polls this at 60fps. CGWindowList gives bounds and occluders in the same pass.
+    override func frame() -> Frame? {
+        guard let info = FinderWatcher.frontFinderWindow() else { return nil }
+        return Frame(bounds: info.bounds, covering: info.coveringRects)
+    }
+}
+
+// MARK: - Any other app
+
+/// Any app window readable through the Accessibility API. AXDocument names the focused
+/// document and follows Preview's active tab; AXTitle is the fuzzy fallback and follows the
+/// Settings pane. Non-final: BrowserContainer and TerminalContainer refine the identity.
+class GenericAppContainer: Container {
+    let bundleID: String
+    let pid: pid_t
+    let ident: String
+
+    init?(app: NSRunningApplication) {
+        guard let win = AXWindows.focusedWindow(pid: app.processIdentifier),
+            let id = AXWindows.string(win, kAXDocumentAttribute)
+                ?? AXWindows.string(win, kAXTitleAttribute),
+            !id.isEmpty
+        else { return nil }
+        self.bundleID = app.bundleIdentifier ?? app.localizedName ?? "app"
+        self.pid = app.processIdentifier
+        self.ident = id
+    }
+
+    override var path: [String] { [bundleID, ident] }
+
+    override func note(at level: Int) -> Note? { AppNotes.load(key: key(at: level)) }
+    override func write(_ note: Note, at level: Int) {
+        AppNotes.save(key: key(at: level), note: note)
+    }
+
+    /// A focused app window is already on top, so nothing covers the note — `covering` stays
+    /// empty and the caller's occlusion test collapses to false on its own.
+    override func frame() -> Frame? {
+        AXWindows.focusedBounds(pid: pid).map { Frame(bounds: $0) }
+    }
+
+    /// App windows glide via AX move/resize notifications instead of 60fps polling.
+    override func tracker(onMove: @escaping (Frame) -> Void) -> AnyObject? {
+        guard let win = AXWindows.focusedWindow(pid: pid) else { return nil }
+        return AXWindowTracker(pid: pid, window: win) { onMove(Frame(bounds: $0)) }
+    }
+}
+
+// MARK: - Resolution
+
+extension Container {
+    /// Which container the frontmost app gets. The one place per-app rules live.
+    static func resolve(front: NSRunningApplication) -> Container? {
+        if front.bundleIdentifier == FinderContainer.bundleID {
+            guard let state = FinderWatcher.current() else { return nil }
+            return FinderContainer(folder: state.path)
+        }
+        return GenericAppContainer(app: front)
+    }
+}
