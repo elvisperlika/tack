@@ -13,6 +13,22 @@ Tack is a tiny macOS menu-bar app. Pin a note to a Finder folder or to any app w
 
 No dock icon, no Electron, no dependencies — just AppKit and the Accessibility API.
 
+## Why Tack?
+
+Plenty of apps let you write a note. Almost none let you stick it *to* something.
+
+|  | Tack | Apple Stickies | Apple Notes | Finder comments | Sticky-note apps |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Sticks to a specific window or folder | ✅ | ❌ floats on the desktop | ❌ lives in its own app | ✅ folder metadata | ❌ floats on the desktop |
+| Follows the window, appears only in context | ✅ | ❌ always visible | ❌ | ❌ buried in Get Info | ❌ always visible |
+| Per-tab notes (browser URL, Terminal tty) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Note travels with its folder when moved or copied | ✅ | — | — | ⚠️ xattr, easily lost | — |
+| Markdown | ✅ | ❌ | ✅ | ❌ | varies |
+| Footprint | menu-bar agent, zero dependencies | built-in | built-in | built-in | usually Electron |
+| Free & open source | ✅ | ❌ | ❌ | — | rarely |
+
+If you just want a scratchpad, Stickies is fine. Tack is for notes that belong to a *place* — this folder, this PDF, this tab — and should show up exactly there, and nowhere else.
+
 ## Install
 
 ```sh
