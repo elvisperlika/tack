@@ -1,16 +1,6 @@
 import CoreGraphics
 import Foundation
 
-/// The front Finder folder's path and its window bounds (AppleScript screen coords:
-/// top-left origin of the primary display).
-struct FinderState: Equatable {
-    var path: String
-    var left: Double
-    var top: Double
-    var right: Double
-    var bottom: Double
-}
-
 /// Front Finder folder window plus the normal windows stacked above it (for occlusion).
 struct FinderWindowInfo {
     var bounds: CGRect  // top-left screen coords
@@ -30,20 +20,18 @@ enum FinderWatcher {
             end tell
             """)
 
-    /// nil when Finder has no open window, isn't running, or permission is denied.
-    static func current() -> FinderState? {
+    /// The front folder's POSIX path; nil when Finder has no open window, isn't running, or
+    /// permission is denied. The window bounds come from CGWindowList below, so only the path
+    /// is read out of the reply — the script still fetches bounds to keep the Apple event,
+    /// and the reply format, untouched.
+    static func frontFolderPath() -> String? {
         var err: NSDictionary?
         guard let result = script?.executeAndReturnError(&err).stringValue, result != "NONE" else {
             return nil
         }
         let parts = result.components(separatedBy: "|")
-        guard parts.count == 2 else { return nil }
-        let nums = parts[1].components(separatedBy: ",").compactMap {
-            Double($0.trimmingCharacters(in: .whitespaces))
-        }
-        guard nums.count == 4 else { return nil }
-        return FinderState(
-            path: parts[0], left: nums[0], top: nums[1], right: nums[2], bottom: nums[3])
+        guard parts.count == 2, !parts[0].isEmpty else { return nil }
+        return parts[0]
     }
 
     /// Front Finder folder window + whatever normal windows sit above it, via CGWindowList —
@@ -57,8 +45,9 @@ enum FinderWatcher {
         var covering: [CGRect] = []
         for info in list {  // front-to-back; only normal windows (layer 0)
             guard info[kCGWindowLayer as String] as? Int == 0,
-                let b = info[kCGWindowBounds as String],
-                let rect = CGRect(dictionaryRepresentation: b as! CFDictionary)
+                // conditional cast: window-server data is another process's word, not ours
+                let b = info[kCGWindowBounds as String] as? NSDictionary,
+                let rect = CGRect(dictionaryRepresentation: b)
             else { continue }
             if info[kCGWindowOwnerName as String] as? String == "Finder" {
                 return FinderWindowInfo(bounds: rect, coveringRects: covering)

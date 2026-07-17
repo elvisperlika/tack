@@ -16,18 +16,30 @@ enum Main {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// How the shown note follows its window. One value instead of a timer optional plus a
+    /// tracker optional, so "both running at once" is not a state that can exist.
+    private enum Tracking {
+        case none
+        case events(AnyObject)  // the container pushes moves itself (AXObserver)
+        case polling(Timer)  // 60fps fallback for containers that can't (Finder)
+    }
+
     private let note = NoteWindow()
-    private var statusItem: NSStatusItem!
+    private var statusItem: NSStatusItem?
     private var pollTimer: Timer?  // slow: which surface is focused (~0.4s)
-    private var trackTimer: Timer?  // fast: glue the note to the window (60fps), only when
-    private var tracker: AnyObject?  // the container can't push moves itself
+    private var tracking: Tracking = .none {
+        didSet {  // a timer outliving its slot in the enum would tick forever
+            if case .polling(let old) = oldValue { old.invalidate() }
+        }
+    }
 
     private var current: Container?
     private var currentBox: LevelBox?  // the level cell the shown note's save closure captures
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "📌"
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.title = "📌"
+        statusItem = item  // retained here; the bar only keeps a weak hold
 
         let menu = NSMenu()
         menu.addItem(
@@ -36,14 +48,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Quit Tack", action: #selector(quit), keyEquivalent: "q"))
         menu.items.forEach { $0.target = self }
         menu.delegate = self  // pin items are rebuilt per open, from the live path
-        statusItem.menu = menu
+        item.menu = menu
 
+        installEditMenu()
         note.onDelete = { [weak self] in self?.stopTracking() }
         AXWindows.promptForPermission()  // needed to bind notes to non-Finder app windows
 
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             self?.pollTarget()
         }
+    }
+
+    /// ⌘C/⌘V/⌘Z only reach a text view through the main menu's key equivalents. An agent app has
+    /// no menu bar to show a menu in, but NSApp still dispatches through `mainMenu` — so this
+    /// invisible Edit menu is the whole reason copy, paste and undo work inside a note.
+    private func installEditMenu() {
+        let edit = NSMenu()
+        let items: [(String, Selector, String)] = [
+            ("Undo", Selector(("undo:")), "z"),
+            ("Redo", Selector(("redo:")), "Z"),  // capital Z is ⌘⇧Z
+            ("Cut", #selector(NSText.cut(_:)), "x"),
+            ("Copy", #selector(NSText.copy(_:)), "c"),
+            ("Paste", #selector(NSText.paste(_:)), "v"),
+            ("Select All", #selector(NSText.selectAll(_:)), "a"),
+        ]
+        // Target stays nil on purpose: each one walks the responder chain to whatever text view
+        // is focused, which is exactly the note being edited.
+        items.forEach { edit.addItem(NSMenuItem(title: $0, action: $1, keyEquivalent: $2)) }
+        let editItem = NSMenuItem()
+        editItem.submenu = edit
+        let main = NSMenu()
+        main.addItem(editItem)
+        NSApp.mainMenu = main
     }
 
     // MARK: - Target resolution
@@ -102,17 +138,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Prefer the container's own move events; fall back to the 60fps timer only if it has none.
     private func startTracking(_ container: Container) {
-        tracker = nil  // release the old observer before creating the next one
-        tracker = container.tracker { [weak self] f in self?.apply(f) }
-        guard tracker == nil else {
-            trackTimer?.invalidate()
-            trackTimer = nil
-            return
-        }
-        guard trackTimer == nil else { return }
-        trackTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) {
-            [weak self] _ in
-            self?.trackTarget()
+        tracking = .none  // release the old observer before creating the next one
+        if let tracker = container.tracker(onMove: { [weak self] f in self?.apply(f) }) {
+            tracking = .events(tracker)
+        } else {
+            tracking = .polling(
+                Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) {
+                    [weak self] _ in
+                    self?.trackTarget()
+                })
         }
     }
 
@@ -133,9 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func stopTracking() {
-        trackTimer?.invalidate()
-        trackTimer = nil
-        tracker = nil
+        tracking = .none  // didSet invalidates a polling timer on the way out
     }
 
     // MARK: - Menu

@@ -146,7 +146,11 @@ class GenericAppContainer: Container {
 /// level-1 key still matches the pre-Container format and old title-keyed browser notes resolve
 /// as window-level notes instead of orphaning.
 final class BrowserContainer: GenericAppContainer {
-    static let bundleIDs: Set<String> = ["com.google.Chrome", "com.apple.Safari"]
+    // Any Chromium/WebKit browser qualifies if it exposes an AXWebArea with a URL — that's the
+    // only thing focusedURL needs. Arc is Chromium, so it rides the same path as Chrome.
+    static let bundleIDs: Set<String> = [
+        "com.google.Chrome", "com.apple.Safari", "company.thebrowser.Browser",  // Arc
+    ]
     private let url: String?
 
     override init?(app: NSRunningApplication) {
@@ -213,8 +217,8 @@ extension Container {
     /// Which container the frontmost app gets. The one place per-app rules live.
     static func resolve(front: NSRunningApplication) -> Container? {
         if front.bundleIdentifier == FinderContainer.bundleID {
-            guard let state = FinderWatcher.current() else { return nil }
-            return FinderContainer(folder: state.path)
+            guard let folder = FinderWatcher.frontFolderPath() else { return nil }
+            return FinderContainer(folder: folder)
         }
         if let id = front.bundleIdentifier {
             if BrowserContainer.bundleIDs.contains(id) { return BrowserContainer(app: front) }

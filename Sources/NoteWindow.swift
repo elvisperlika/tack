@@ -1,163 +1,139 @@
 import AppKit
 
-/// Coordinate math, kept pure so it can be asserted in --selftest.
-enum Coord {
-    /// AppleScript top-left screen point of the note -> Cocoa point for `setFrameTopLeftPoint`.
-    static func cocoaTopLeft(
-        finderLeft: Double, finderTop: Double, dx: Double, dy: Double, primaryHeight: Double
-    ) -> NSPoint {
-        NSPoint(x: finderLeft + dx, y: primaryHeight - (finderTop + dy))
-    }
-
-    /// Holds the note inside the tracked window: the offset is clamped so the note's whole
-    /// rect stays within the window. A window smaller than the note pins it to the top-left.
-    static func clamp(dx: Double, dy: Double, note: CGSize, window: CGSize) -> (
-        dx: Double, dy: Double
-    ) {
-        (
-            min(max(0, dx), max(0, Double(window.width - note.width))),
-            min(max(0, dy), max(0, Double(window.height - note.height)))
-        )
-    }
-}
-
-enum Screens {
-    // ponytail: single-display assumption; refine for multi-monitor if needed
-    static func primaryHeight() -> Double {
-        Double(
-            (NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main)?.frame
-                .height ?? 0)
-    }
-}
-
-/// "RRGGBB" hex <-> NSColor, kept pure so it can be asserted in --selftest.
-enum Swatch {
-    static let defaultHex = "FFEB73"  // sticky-note yellow
-
-    static func color(fromHex hex: String) -> NSColor {
-        let h = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
-        guard h.count == 6, let v = Int(h, radix: 16) else { return color(fromHex: defaultHex) }
-        return NSColor(
-            srgbRed: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255,
-            blue: CGFloat(v & 0xFF) / 255, alpha: 1)
-    }
-
-    static func hex(from color: NSColor) -> String {
-        let c = color.usingColorSpace(.sRGB) ?? color
-        return String(
-            format: "%02X%02X%02X",
-            Int((c.redComponent * 255).rounded()),
-            Int((c.greenComponent * 255).rounded()),
-            Int((c.blueComponent * 255).rounded()))
-    }
-}
-
-/// The app-wide list of palette colours, persisted in UserDefaults. Starts with 3 presets
-/// and grows via the "+" in the colour menu.
-enum Palette {
-    private static let key = "paletteColors"
-    static let presets = ["FFEB73", "FFB3BA", "AEC6FF"]  // yellow, pink, blue
-
-    static var colors: [String] { UserDefaults.standard.stringArray(forKey: key) ?? presets }
-
-    static func add(_ hex: String) {
-        var list = colors
-        guard !list.contains(hex) else { return }
-        list.append(hex)
-        UserDefaults.standard.set(list, forKey: key)
-    }
-
-    static func remove(_ hex: String) {
-        var list = colors
-        guard list.count > 1, let i = list.firstIndex(of: hex) else { return }  // keep at least one
-        list.remove(at: i)
-        UserDefaults.standard.set(list, forKey: key)
-    }
-}
-
 /// Borderless windows can't become key by default, so text editing wouldn't work.
 private final class KeyableWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
 
-/// A palette swatch button that remembers which colour it is.
-private final class ColorSwatchButton: NSButton {
-    var hex = ""
+/// Clicking a `[ ]` ticks it; every other click is an ordinary click.
+private final class MarkdownTextView: NSTextView {
+    override func mouseDown(with event: NSEvent) {
+        let i = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+        guard let box = Markdown.todoBox(in: string, at: i) else {
+            return super.mouseDown(with: event)
+        }
+        let ticked = (string as NSString).substring(with: box) == "[ ]" ? "[x]" : "[ ]"
+        // shouldChangeText/didChangeText registers the undo *and* posts the change notification,
+        // so the existing textDidChange path restyles and saves. No second save path to keep honest.
+        guard shouldChangeText(in: box, replacementString: ticked) else { return }
+        textStorage?.replaceCharacters(in: box, with: ticked)
+        didChangeText()
+    }
 }
 
-/// One reusable floating yellow post-it. Follows the Finder window by keeping a fixed
-/// offset (dx, dy) from its top-left; dragging the note updates and persists that offset.
+/// One reusable floating post-it. Follows the tracked window by keeping a fixed offset (dx, dy)
+/// from its top-left; dragging the note updates and persists that offset.
 final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private let window: KeyableWindow
+    private let tintView: NSView  // the palette colour, sheer, over the glass
     private let textView: NSTextView
     private let closeButton: NSButton
     private let colorButton: NSButton
+    private lazy var paletteMenu = PaletteMenu { [weak self] in self?.apply(color: $0) }
+    private let saver = Debouncer(delay: 0.5)  // collapse typing/drag bursts into one write
 
     /// Called after the user deletes the note (so the app can stop tracking it).
     var onDelete: (() -> Void)?
 
     private var colorHex = Swatch.defaultHex
     private var saveHandler: (Note) -> Void = { _ in }  // where the current note persists
-    private var finderLeft = 0.0
-    private var finderTop = 0.0
-    private var windowSize = CGSize.zero  // tracked window's size, so the note can't be dragged out of it
+    /// The tracked window, top-left screen coords. One value, because its origin and size only
+    /// ever change together — three loose fields drifting apart was a bug waiting to happen.
+    private var tracked = CGRect.zero
     private var dx = 20.0
     private var dy = 40.0
     private var isProgrammaticMove = false
-    private var saveWork: DispatchWorkItem?
     private var active = false  // current folder has a note to show
     private var occluded = false  // the note's spot on the Finder window is covered
     private var shown = false  // what the last pop animated toward (the window stays visible while popping out)
 
+    static let defaultSize = NSSize(width: 220, height: 170)
+    /// Any smaller and the swatch and trash buttons start eating the text.
+    static let minSize = NSSize(width: 160, height: 120)
+
+    /// Rounds the *material*. A .behindWindow blur is shaped by the window server from this
+    /// mask's alpha, not by the layer, so `cornerRadius` alone leaves a square pane of frost
+    /// (and a square shadow) around the rounded card. Stretchable, because the note resizes:
+    /// the cap insets pin the corners and the 1pt middle takes the stretch.
+    private static func roundedMask(radius: CGFloat) -> NSImage {
+        let edge = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
+    }
+
     override init() {
-        let w: CGFloat = 220
-        let h: CGFloat = 170
+        let w = Self.defaultSize.width
+        let h = Self.defaultSize.height
         let strip: CGFloat = 28
         let radius: CGFloat = 12
+        // .resizable on a borderless window gets edge-dragging from AppKit for free — no grow
+        // box, no drag tracking of our own.
         window = KeyableWindow(
             contentRect: NSRect(x: 0, y: 0, width: w, height: h),
-            styleMask: .borderless, backing: .buffered, defer: false)
+            styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
+        window.minSize = Self.minSize
         window.level = .floating
         window.isMovableByWindowBackground = true
         window.isOpaque = false
-        window.backgroundColor = .clear  // rounded card is drawn by the content layer below
+        window.backgroundColor = .clear  // the rounded glass card below is the whole background
         window.hasShadow = true
         window.isReleasedWhenClosed = false
         // ponytail: can't query a window's Space via public API, so the note binds to the
         // desktop that's active when its folder becomes frontmost, and stays there.
         window.collectionBehavior = [.moveToActiveSpace]
 
-        // Rounded yellow card like a Mac window. Its bare background is the drag area.
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: w, height: h))
-        content.wantsLayer = true
-        content.layer?.backgroundColor =
-            NSColor(calibratedRed: 1.0, green: 0.92, blue: 0.45, alpha: 1.0).cgColor
-        content.layer?.cornerRadius = radius
-        content.layer?.masksToBounds = true
+        // Rounded glass card: a blur of whatever sits behind the note, with the palette colour
+        // as a sheer tint over it. The bare tint is the drag area.
+        // ponytail: NSVisualEffectView is the glass this deployment target has — Apple's Liquid
+        // Glass (NSGlassEffectView) is macOS 26+, and Tack targets 13. Material is taste.
+        let glass = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: w, height: h))
+        glass.material = .popover
+        glass.blendingMode = .behindWindow  // blur what's behind the note, not what's inside it
+        glass.state = .active  // stay frosted while the note isn't key, which is most of the time
+        glass.appearance = NSAppearance(named: .aqua)  // a light card with black text, even in dark mode
+        glass.maskImage = Self.roundedMask(radius: radius)  // rounds the material — see above
+        glass.wantsLayer = true
+        glass.layer?.cornerRadius = radius  // rounds the tint and text on top of it
+        glass.layer?.masksToBounds = true
+
+        // The palette colour lives here rather than on the glass: NSVisualEffectView owns its
+        // own layer's drawing, so a tint of our own needs a view of its own.
+        tintView = NSView(frame: glass.bounds)
+        tintView.autoresizingMask = [.width, .height]
+        tintView.wantsLayer = true
+        glass.addSubview(tintView)
 
         // Editable text, below the top drag strip.
         let scroll = NSScrollView(frame: NSRect(x: 4, y: 4, width: w - 8, height: h - strip - 4))
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = false
         scroll.autoresizingMask = [.width, .height]
-        textView = NSTextView(frame: scroll.bounds)
+        textView = MarkdownTextView(frame: scroll.bounds)
         textView.drawsBackground = false
-        textView.font = .systemFont(ofSize: 14)
+        textView.font = MarkdownStyle.baseFont
         textView.textColor = .black
         textView.isRichText = false
+        textView.allowsUndo = true  // off by default — without it ⌘Z reaches an empty undo stack
         textView.textContainerInset = NSSize(width: 6, height: 6)
         textView.autoresizingMask = [.width]
         textView.isVerticallyResizable = true
         textView.textContainer?.widthTracksTextView = true
         scroll.documentView = textView
-        content.addSubview(scroll)
+        glass.addSubview(scroll)
 
         // Colour selector, top-left: a swatch button that pops up the palette menu.
         colorButton = NSButton(frame: NSRect(x: 6, y: h - 24, width: 20, height: 20))
         colorButton.isBordered = false
         colorButton.imagePosition = .imageOnly
-        content.addSubview(colorButton)
+        colorButton.autoresizingMask = [.minYMargin, .maxXMargin]  // stays top-left on resize
+        glass.addSubview(colorButton)
 
         // Delete button, top-right (added last so it sits above everything).
         closeButton = NSButton(frame: NSRect(x: w - 26, y: h - 24, width: 20, height: 20))
@@ -166,9 +142,10 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         closeButton.image = NSImage(
             systemSymbolName: "trash.fill", accessibilityDescription: "Delete note")
         closeButton.contentTintColor = NSColor.black.withAlphaComponent(0.35)
-        content.addSubview(closeButton)
+        closeButton.autoresizingMask = [.minYMargin, .minXMargin]  // stays top-right on resize
+        glass.addSubview(closeButton)
 
-        window.contentView = content
+        window.contentView = glass
         super.init()
         window.delegate = self
         textView.delegate = self
@@ -176,121 +153,36 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         closeButton.action = #selector(deleteTapped)
         colorButton.target = self
         colorButton.action = #selector(pickColor)
-        colorButton.image = swatchImage(hex: colorHex)
+        colorButton.image = Swatch.image(hex: colorHex)
+        applyTint(Swatch.color(fromHex: colorHex))  // one source of truth for the default yellow
         window.invalidateShadow()
     }
 
-    // Pop up the palette menu below the swatch button.
+    // MARK: - Colour
+
     @objc private func pickColor() {
-        let menu = NSMenu()
-        menu.addItem(paletteGridItem())
-        menu.addItem(.separator())
-        let plus = NSMenuItem(
-            title: "Aggiungi colore…", action: #selector(addColor), keyEquivalent: "")
-        plus.target = self
-        plus.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Add colour")
-        menu.addItem(plus)
-
-        if Palette.colors.count > 1 {  // a "Remove" submenu of swatches (never empty the palette)
-            let remove = NSMenuItem(title: "Rimuovi colore", action: nil, keyEquivalent: "")
-            remove.image = NSImage(
-                systemSymbolName: "minus", accessibilityDescription: "Remove colour")
-            let sub = NSMenu()
-            for hex in Palette.colors {
-                let it = NSMenuItem(
-                    title: "", action: #selector(removeColor(_:)), keyEquivalent: "")
-                it.target = self
-                it.image = swatchImage(hex: hex)
-                it.representedObject = hex
-                sub.addItem(it)
-            }
-            remove.submenu = sub
-            menu.addItem(remove)
-        }
-        menu.popUp(
-            positioning: nil, at: NSPoint(x: 0, y: colorButton.bounds.height + 4), in: colorButton)
+        paletteMenu.popUp(from: colorButton, currentHex: colorHex)
     }
 
-    @objc private func removeColor(_ sender: NSMenuItem) {
-        guard let hex = sender.representedObject as? String else { return }
-        Palette.remove(hex)
+    /// How much of the palette colour sits over the blur. The material underneath (.popover)
+    /// is already milky, so anything much past ~0.35 buries the blur and the card reads as
+    /// solid pastel — which is exactly what it shipped as at 0.6, and why this is low now.
+    private static let tintAlpha: CGFloat = 0.35
+
+    private func applyTint(_ color: NSColor) {
+        tintView.layer?.backgroundColor = color.withAlphaComponent(Self.tintAlpha).cgColor
     }
 
-    // Colour swatches laid out in a grid, max 5 per row.
-    private func paletteGridItem() -> NSMenuItem {
-        let colors = Palette.colors
-        let cols = min(colors.count, 5)
-        let rows = (colors.count + 4) / 5
-        let cell: CGFloat = 26
-        let pad: CGFloat = 8
-        let width = CGFloat(cols) * cell + pad * 2
-        let height = CGFloat(rows) * cell + pad * 2
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
-        for (i, hex) in colors.enumerated() {
-            let cellX = pad + CGFloat(i % 5) * cell
-            let cellY = height - pad - CGFloat(i / 5 + 1) * cell  // fill top-to-bottom
-            let btn = ColorSwatchButton(
-                frame: NSRect(x: cellX + 2, y: cellY + 2, width: cell - 4, height: cell - 4))
-            btn.hex = hex
-            btn.isBordered = false
-            btn.imagePosition = .imageOnly
-            btn.image = swatchImage(hex: hex, size: 20)
-            btn.target = self
-            btn.action = #selector(swatchClicked(_:))
-            view.addSubview(btn)
-        }
-        let item = NSMenuItem()
-        item.view = view
-        return item
-    }
-
-    @objc private func swatchClicked(_ sender: ColorSwatchButton) {
-        sender.enclosingMenuItem?.menu?.cancelTracking()  // close the menu
-        apply(color: Swatch.color(fromHex: sender.hex))
-    }
-
-    // "+": pick a new colour in the system panel; it previews live and joins the palette on close.
-    @objc private func addColor() {
-        let panel = NSColorPanel.shared
-        panel.setTarget(self)
-        panel.setAction(#selector(panelColorChanged))
-        panel.color = Swatch.color(fromHex: colorHex)
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(panelClosed),
-            name: NSWindow.willCloseNotification, object: panel)
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
-    }
-
-    @objc private func panelColorChanged() { apply(color: NSColorPanel.shared.color) }
-
-    @objc private func panelClosed(_ note: Notification) {
-        NotificationCenter.default.removeObserver(
-            self, name: NSWindow.willCloseNotification, object: NSColorPanel.shared)
-        NSColorPanel.shared.setTarget(nil)
-        Palette.add(Swatch.hex(from: NSColorPanel.shared.color))
-    }
-
+    /// The chosen colour lands here (from a swatch click or live from the system panel):
+    /// remember it, show it, persist it.
     private func apply(color: NSColor) {
         colorHex = Swatch.hex(from: color)
-        window.contentView?.layer?.backgroundColor = color.cgColor
-        colorButton.image = swatchImage(hex: colorHex)
+        applyTint(color)
+        colorButton.image = Swatch.image(hex: colorHex)
         scheduleSave()
     }
 
-    private func swatchImage(hex: String, size: CGFloat = 16) -> NSImage {
-        let img = NSImage(size: NSSize(width: size, height: size))
-        img.lockFocus()
-        let path = NSBezierPath(
-            roundedRect: NSRect(x: 1, y: 1, width: size - 2, height: size - 2), xRadius: 3,
-            yRadius: 3)
-        Swatch.color(fromHex: hex).setFill()
-        path.fill()
-        NSColor.black.withAlphaComponent(0.15).setStroke()
-        path.stroke()
-        img.unlockFocus()
-        return img
-    }
+    // MARK: - Show / hide
 
     @objc private func deleteTapped() {
         saveHandler(Note(text: "", dx: dx, dy: dy, color: colorHex))  // empty text removes the note
@@ -304,17 +196,24 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         self.saveHandler = save
         self.dx = note.dx
         self.dy = note.dy
-        self.finderLeft = Double(bounds.minX)
-        self.finderTop = Double(bounds.minY)
-        self.windowSize = bounds.size
+        self.tracked = bounds
         active = true
         occluded = false  // re-evaluated on the next tracking frame
         colorHex = note.color ?? Swatch.defaultHex
-        let c = Swatch.color(fromHex: colorHex)
-        window.contentView?.layer?.backgroundColor = c.cgColor
-        colorButton.image = swatchImage(hex: colorHex)
+        applyTint(Swatch.color(fromHex: colorHex))
+        colorButton.image = Swatch.image(hex: colorHex)
         textView.string = note.text  // programmatic set does not fire textDidChange
-        applyPosition()
+        restyle()  // ...so style it here by hand
+        withProgrammaticMove {
+            window.setFrame(
+                NSRect(
+                    origin: window.frame.origin,
+                    size: NSSize(
+                        width: note.w ?? Self.defaultSize.width,
+                        height: note.h ?? Self.defaultSize.height)),
+                display: false)
+        }
+        applyPosition()  // after the resize: clamping depends on the note's size
         // Switching between two notes reuses this one window, so pop unconditionally rather than
         // going through applyVisibility — otherwise the incoming note would just teleport in.
         shown = true
@@ -340,6 +239,16 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         guard visible != shown else { return }  // already going the right way
         shown = visible
         if visible { popIn() } else { popOut() }
+    }
+
+    func hide() {
+        active = false
+        applyVisibility()
+    }
+
+    func focusForEditing() {
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(textView)
     }
 
     // MARK: - Pop animation
@@ -384,63 +293,80 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
             })
     }
 
+    // MARK: - Geometry
+
     /// The tracked window moved or resized — keep the offset, reposition. No-op if unchanged.
     /// A resize re-clamps, so shrinking the window pulls the note back inside with it.
     func updateWindow(bounds: CGRect) {
-        let (left, top) = (Double(bounds.minX), Double(bounds.minY))
-        guard left != finderLeft || top != finderTop || bounds.size != windowSize else { return }
-        finderLeft = left
-        finderTop = top
-        windowSize = bounds.size
+        guard bounds != tracked else { return }
+        tracked = bounds
         applyPosition()
     }
 
-    func hide() {
-        active = false
-        applyVisibility()
-    }
-
-    func focusForEditing() {
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(textView)
-    }
-
-    private func applyPosition() {
-        let c = Coord.clamp(dx: dx, dy: dy, note: window.frame.size, window: windowSize)
-        dx = c.dx
-        dy = c.dy
+    /// Frame changes of our own must not read back as the user's: the window delegate fires
+    /// either way, and this flag is what tells the two apart. A bracket rather than two bare
+    /// assignments, so no early return can ever leave the flag stuck on.
+    private func withProgrammaticMove(_ body: () -> Void) {
         isProgrammaticMove = true
-        window.setFrameTopLeftPoint(
-            Coord.cocoaTopLeft(
-                finderLeft: finderLeft, finderTop: finderTop,
-                dx: dx, dy: dy, primaryHeight: Screens.primaryHeight()))
+        body()
         isProgrammaticMove = false
     }
 
-    // User dragged the note: recompute the offset from the Finder window's top-left, clamp it
-    // back inside the window, then save.
-    // ponytail: snapping back in windowDidMove rides AppKit's own drag loop; if it ever feels
+    private func applyPosition() {
+        let c = Coord.clamp(dx: dx, dy: dy, note: window.frame.size, window: tracked.size)
+        dx = c.dx
+        dy = c.dy
+        withProgrammaticMove {
+            window.setFrameTopLeftPoint(
+                Coord.cocoaTopLeft(
+                    finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
+                    dx: dx, dy: dy, primaryHeight: Screens.primaryHeight()))
+        }
+    }
+
+    // User dragged or resized the note: recompute the offset from the Finder window's top-left,
+    // clamp it back inside the window, then save.
+    // ponytail: snapping back in the delegate rides AppKit's own drag loop; if it ever feels
     // jittery at the border, take over the drag in the content view's mouseDragged instead.
-    func windowDidMove(_ notification: Notification) {
+    private func noteGeometryChanged() {
         guard !isProgrammaticMove else { return }
         let f = window.frame
-        let noteTopLeftY = Screens.primaryHeight() - Double(f.maxY)  // Cocoa -> top-left screen coords
-        dx = Double(f.minX) - finderLeft
-        dy = noteTopLeftY - finderTop
+        (dx, dy) = Coord.offsets(
+            noteMinX: Double(f.minX), noteCocoaMaxY: Double(f.maxY),
+            finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
+            primaryHeight: Screens.primaryHeight())
         applyPosition()  // clamps dx/dy and snaps the note back if the drag left the window
         scheduleSave()
     }
 
-    func textDidChange(_ notification: Notification) { scheduleSave() }
+    func windowDidMove(_ notification: Notification) { noteGeometryChanged() }
+
+    /// Dragging the top or left edge moves the note's top-left corner without moving the frame's
+    /// origin, so windowDidMove never fires — a resize has to recompute the offset too, not just
+    /// re-clamp, or those two edges would fight the user.
+    func windowDidResize(_ notification: Notification) { noteGeometryChanged() }
+
+    // MARK: - Text and saving
+
+    /// Style the markdown where it sits. The buffer keeps every marker — they just fade — so
+    /// `textView.string` stays the note's source and nothing needs serialising back.
+    private func restyle() {
+        guard let ts = textView.textStorage else { return }
+        MarkdownStyle.apply(to: ts)
+    }
+
+    func textDidChange(_ notification: Notification) {
+        restyle()
+        scheduleSave()
+    }
 
     private func scheduleSave() {
-        saveWork?.cancel()
-        let note = Note(text: textView.string, dx: dx, dy: dy, color: colorHex)
+        let note = Note(
+            text: textView.string, dx: dx, dy: dy, color: colorHex,
+            w: Double(window.frame.width), h: Double(window.frame.height))
         // snapshot: an in-flight save must use the handler — and level — of the note it was
         // scheduled for, not whichever note is showing 0.5s later
         let save = saveHandler
-        let work = DispatchWorkItem { save(note) }
-        saveWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+        saver.call { save(note) }
     }
 }

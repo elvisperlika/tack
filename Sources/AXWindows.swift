@@ -1,28 +1,11 @@
 import AppKit
 import ApplicationServices
 
-/// The focused window of some app: a stable-ish identity key plus its bounds.
-struct AppWindowInfo: Equatable {
-    var key: String  // "<bundleID>|<document path or window title>"
-    var bounds: CGRect  // top-left screen coords, like Finder/CGWindow
-}
-
 /// Reads the frontmost app's focused window via the Accessibility API. Needs the
 /// Accessibility permission (System Settings ▸ Privacy & Security ▸ Accessibility).
 enum AXWindows {
     static func promptForPermission() {
         _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-    }
-
-    /// Identity + bounds — used to decide which note to show.
-    static func focused(of app: NSRunningApplication) -> AppWindowInfo? {
-        guard let win = focusedWindow(pid: app.processIdentifier) else { return nil }
-        // Prefer the document path (stable across restarts); fall back to the window title (fuzzy).
-        guard let ident = string(win, kAXDocumentAttribute) ?? string(win, kAXTitleAttribute),
-            !ident.isEmpty, let b = bounds(of: win)
-        else { return nil }
-        let bundle = app.bundleIdentifier ?? app.localizedName ?? "app"
-        return AppWindowInfo(key: bundle + "|" + ident, bounds: b)
     }
 
     /// Just the bounds — used as a fallback when the notification-based tracker isn't up.
@@ -38,7 +21,9 @@ enum AXWindows {
         guard
             AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value)
                 == .success,
-            let value
+            let value,
+            // The AX payload comes from another process; a type check beats trusting it.
+            CFGetTypeID(value) == AXUIElementGetTypeID()
         else { return nil }
         return (value as! AXUIElement)
     }
@@ -56,7 +41,8 @@ enum AXWindows {
         var sv: CFTypeRef?
         guard AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pv) == .success,
             let pv,
-            AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sv) == .success, let sv
+            AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sv) == .success, let sv,
+            CFGetTypeID(pv) == AXValueGetTypeID(), CFGetTypeID(sv) == AXValueGetTypeID()
         else { return nil }
         var p = CGPoint.zero
         var s = CGSize.zero

@@ -15,6 +15,11 @@ enum SelfTest {
         finderContainerRoundTrip()
         genericKeyMatchesLegacyFormat()
         levelLabels()
+        debouncerCollapses()
+        markdownSpans()
+        markdownStyling()
+        markdownTodoBox()
+        noteSizeIsOptional()
         urlNormalization()
         print("✅ all self-tests passed")
     }
@@ -75,11 +80,29 @@ enum SelfTest {
         assert(c.dx == 0 && c.dy == 0, "tiny window should pin to corner: \(c)")
     }
 
+    static func debouncerCollapses() {
+        let d = Debouncer(delay: 0.05)
+        var hits: [Int] = []
+        d.call { hits.append(1) }
+        d.call { hits.append(2) }  // must cancel the first
+        // Spinning the main run loop drains the main dispatch queue in a CLI process.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        assert(hits == [2], "only the last scheduled block should fire: \(hits)")
+    }
+
     static func coordFlip() {
         // primary height 1000, window top-left (100,50), offset (20,40) -> note TL (120,90) -> Cocoa y 910
         let p = Coord.cocoaTopLeft(
             finderLeft: 100, finderTop: 50, dx: 20, dy: 40, primaryHeight: 1000)
         assert(p.x == 120 && p.y == 910, "coord flip wrong: \(p)")
+
+        // The round trip: offsets() must be cocoaTopLeft()'s exact inverse, or a drag would
+        // shift the note by the drift every time the delegate recomputes dx/dy.
+        // cocoaTopLeft returns the note's top-left in Cocoa coords, which is the frame's maxY.
+        let back = Coord.offsets(
+            noteMinX: Double(p.x), noteCocoaMaxY: Double(p.y),
+            finderLeft: 100, finderTop: 50, primaryHeight: 1000)
+        assert(back.dx == 20 && back.dy == 40, "flip round trip drifted: \(back)")
     }
 }
 
@@ -95,7 +118,7 @@ final class FakeContainer: Container {
     override var path: [String] { ident }
     override func note(at level: Int) -> Note? { storage[key(at: level)] }
     override func write(_ note: Note, at level: Int) {
-        storage[key(at: level)] = note.text.isEmpty ? nil : note  // empty text == delete
+        storage[key(at: level)] = note.isDeletion ? nil : note
     }
 }
 
@@ -104,8 +127,8 @@ extension SelfTest {
         let p = ["com.foo.Bar", "doc.txt"]
         assert(Container.key(path: p, level: 0) == "com.foo.Bar", "app level should be the bundle ID")
 
-        // The no-migration guarantee: identical to the old `bundle + "|" + ident` key
-        // (AXWindows.swift:25). If this fails, every existing app note is orphaned.
+        // The no-migration guarantee: identical to the `bundle + "|" + ident` key the app wrote
+        // before Container existed. If this fails, every existing app note is orphaned.
         assert(Container.key(path: p, level: 1) == "com.foo.Bar|doc.txt", "key format changed")
 
         assert(Container.key(path: ["a", "b", "c"], level: 1) == "a|b", "should join a prefix only")
@@ -184,6 +207,118 @@ extension SelfTest {
         // the deepest level is the window itself, not a tab.
         assert(LevelName.label(level: 0, of: 2) == "Pin to this app", "level 0 is always the app")
         assert(LevelName.label(level: 1, of: 2) == "Pin to this window", "deepest of 2 is a window")
+    }
+
+    static func markdownSpans() {
+        func styles(_ s: String) -> [Markdown.Style] { Markdown.spans(in: s).map(\.style) }
+
+        // Content excludes the markers, and both marker runs are reported so they can be dimmed.
+        let b = Markdown.spans(in: "a **milk** b")
+        assert(b.count == 1 && b[0].style == .bold, "one bold span expected: \(b)")
+        assert(b[0].content == NSRange(location: 4, length: 4), "content should be 'milk': \(b[0])")
+        assert(
+            b[0].markers == [NSRange(location: 2, length: 2), NSRange(location: 8, length: 2)],
+            "markers should be the two '**': \(b[0])")
+
+        // The lookaround guard: the inner '*' of '**' must not read as italic.
+        assert(styles("**bold**") == [.bold], "italic fired inside bold: \(styles("**bold**"))")
+        assert(styles("*it*") == [.italic], "italic")
+        assert(styles("_it_") == [.italic], "underscore italic")
+        assert(styles("snake_case_here").isEmpty, "underscores inside a word are not italic")
+
+        // First claim wins, and code claims first.
+        assert(styles("`**x**`") == [.code], "code should claim its span: \(styles("`**x**`"))")
+
+        let h = Markdown.spans(in: "## Shopping")
+        assert(h.count == 1 && h[0].style == .heading(2), "should be an h2: \(h)")
+        assert(
+            h[0].content == NSRange(location: 3, length: 8), "content should be 'Shopping': \(h[0])")
+        assert(styles("# a") == [.heading(1)] && styles("### a") == [.heading(3)], "levels 1 and 3")
+        assert(styles("#### a").isEmpty, "four hashes is not a heading we style")
+
+        // A todo line must never also read as a bullet.
+        assert(styles("- [ ] pay rent") == [.todo(done: false)], "unticked: \(styles("- [ ] pay rent"))")
+        assert(styles("- [x] pay rent") == [.todo(done: true)], "ticked")
+        assert(styles("- [X] pay rent") == [.todo(done: true)], "uppercase X ticks too")
+        assert(styles("- milk") == [.bullet], "plain bullet")
+
+        assert(styles("~~gone~~") == [.strike], "strike")
+        assert(styles("just text").isEmpty, "plain text has no spans — the no-migration case")
+        assert(styles("**foo").isEmpty, "unterminated bold is not a span")
+
+        // Line rules are reported before inline ones, so styling composes rather than flattens.
+        assert(styles("- **milk** 2L") == [.bullet, .bold], "bullet then bold: \(styles("- **milk** 2L"))")
+        assert(styles("# Shopping\n- milk") == [.heading(1), .bullet], "line rules match per line")
+    }
+
+    static func markdownStyling() {
+        func font(_ ts: NSTextStorage, _ i: Int) -> NSFont? {
+            ts.attribute(.font, at: i, effectiveRange: nil) as? NSFont
+        }
+        func color(_ ts: NSTextStorage, _ i: Int) -> NSColor? {
+            ts.attribute(.foregroundColor, at: i, effectiveRange: nil) as? NSColor
+        }
+
+        // "# A **b**" — 0:'#' 2:'A' 4,5:'**' 6:'b'
+        let ts = NSTextStorage(string: "# A **b**")
+        MarkdownStyle.apply(to: ts)
+
+        assert(font(ts, 2)?.pointSize == 18, "h1 should be 18pt: \(String(describing: font(ts, 2)))")
+        // The compose guarantee: bold inside a heading keeps the heading's size. If addTrait ever
+        // sets an absolute font instead of converting, this drops to 14 and the heading breaks.
+        assert(
+            font(ts, 6)?.pointSize == 18,
+            "bold inside a heading should stay heading-sized: \(String(describing: font(ts, 6)))")
+        assert(
+            NSFontManager.shared.traits(of: font(ts, 6)!).contains(.boldFontMask),
+            "and should actually be bold")
+        assert(color(ts, 0) == MarkdownStyle.dim, "the '#' marker should be dimmed")
+        assert(color(ts, 4) == MarkdownStyle.dim, "the '**' markers should be dimmed")
+        assert(color(ts, 2) == .black, "heading text should not be dimmed")
+
+        // Restyling is a full reset, not an accumulation: markdown removed => attributes gone.
+        ts.replaceCharacters(in: NSRange(location: 0, length: ts.length), with: "plain")
+        MarkdownStyle.apply(to: ts)
+        assert(font(ts, 0) == MarkdownStyle.baseFont, "stale styling should be reset")
+        assert(color(ts, 0) == .black, "stale dimming should be reset")
+
+        // A ticked todo strikes its content through; an unticked one leaves it alone.
+        let done = NSTextStorage(string: "- [x] pay")
+        MarkdownStyle.apply(to: done)
+        assert(
+            done.attribute(.strikethroughStyle, at: 6, effectiveRange: nil) != nil,
+            "a ticked todo should strike its text")
+        let open = NSTextStorage(string: "- [ ] pay")
+        MarkdownStyle.apply(to: open)
+        assert(
+            open.attribute(.strikethroughStyle, at: 6, effectiveRange: nil) == nil,
+            "an unticked todo should not")
+    }
+
+    static func noteSizeIsOptional() {
+        // The no-migration guarantee, same shape as the key-format one: a note written before
+        // resizing existed must still decode, and say nothing about its size rather than 0x0.
+        let old = #"{"text":"hi","dx":12,"dy":34}"#.data(using: .utf8)!
+        guard let n = try? JSONDecoder().decode(Note.self, from: old) else {
+            assert(false, "a pre-resize note should still decode")
+            return
+        }
+        assert(n.w == nil && n.h == nil, "a missing size should decode as nil, not zero: \(n)")
+        assert(n.text == "hi" && n.dx == 12, "the rest of the note should survive: \(n)")
+
+        let sized = Note(text: "hi", dx: 1, dy: 2, color: nil, w: 300, h: 240)
+        let data = try! JSONEncoder().encode(sized)
+        assert(try! JSONDecoder().decode(Note.self, from: data) == sized, "size should round-trip")
+    }
+
+    static func markdownTodoBox() {
+        // "- [ ] pay rent" — 0:'-' 1:' ' 2:'[' 3:' ' 4:']', so the box is {2,3}.
+        let s = "- [ ] pay rent"
+        let box = NSRange(location: 2, length: 3)
+        assert(Markdown.todoBox(in: s, at: 2) == box, "the '[' should hit")
+        assert(Markdown.todoBox(in: s, at: 3) == box, "the middle should hit")
+        assert(Markdown.todoBox(in: s, at: 10) == nil, "a click on the text should miss")
+        assert(Markdown.todoBox(in: "- milk", at: 2) == nil, "a plain bullet has no box")
     }
 
     static func urlNormalization() {
