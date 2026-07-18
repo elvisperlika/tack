@@ -31,13 +31,21 @@ If you just want a scratchpad, Stickies is fine. Tack is for notes that belong t
 
 ## Install
 
+**Download:** grab `Tack.zip` from the [latest release](https://github.com/elvisperlika/tack/releases/latest), unzip, move `Tack.app` to Applications and open it. The app isn't notarized, so macOS will balk the first time — allow it under **System Settings → Privacy & Security → Open Anyway**, or clear the quarantine flag yourself:
+
 ```sh
-git clone <repo-url>
+xattr -d com.apple.quarantine /Applications/Tack.app
+```
+
+**Or build from source:**
+
+```sh
+git clone https://github.com/elvisperlika/tack.git
 cd tack
 ./bundle.sh && open Tack.app
 ```
 
-Requires macOS 14+ and Xcode command-line tools.
+Requires macOS 14+ (building also needs the Xcode command-line tools).
 
 On first launch, macOS asks for permission to control Finder (and later Terminal, for tab notes) and for Accessibility access (needed to track app windows). Grant both; the 📌 appears in the menu bar.
 
@@ -45,13 +53,15 @@ On first launch, macOS asks for permission to control Finder (and later Terminal
 
 1. Focus a Finder folder or any app window.
 2. Click 📌 → **Add note here**.
-3. Type. Drag the note where you want it — it stays glued to that window. Drag any edge to resize it; the size is saved with the note, and it's capped to the window — shrink the window below the note and the note shrinks to fit rather than spilling over, then grows back when the window does.
+3. Type. Drag the note where you want it — it stays glued to that window, and it can't leave it: dragging toward an edge stops the note at the border. Drag any edge to resize it; the size is saved with the note, and it's capped to the window — shrink the window below the note and the note shrinks to fit rather than spilling over, then grows back when the window does.
 
 Notes style markdown as you type: `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `#` headings, `-` bullets, and `- [ ]` todo lists. Click a checkbox to tick it. The markers stay in the text and just fade, so what gets saved is exactly what you typed.
 
-The note's corner carries two buttons. A swatch picks its colour — the palette starts with three and grows via "+". A 📌 pushpin next to it chooses how widely the note shows: **Pin to this window / app**, and **tab** in Chrome/Safari/Arc and Terminal. The pushpin only appears when there's a choice to make — Finder notes have no levels (they live in the folder itself), so it stays hidden there.
+Everything else is behind the note's single ⊙ button, top-right:
 
-Emptying a note's text deletes it.
+- **Color** — a swatch grid. The palette starts with four (yellow, pink, blue, white) and grows via "+"; a tiny × on each swatch's corner removes it (the last colour can't be removed).
+- **Pin** — how widely the note shows: **this window / this app**, and **this tab** in Chrome/Safari/Arc and Terminal. The entry only appears when there's a choice to make — Finder notes have no levels (they live in the folder itself).
+- **Delete Note** — or just empty the note's text; both remove it.
 
 ## Development
 
@@ -70,7 +80,7 @@ A slow timer fires every 0.4 seconds and asks macOS which app is frontmost. That
 - If it's Finder, Tack sends a single Apple event asking which folder is in front (the window's position comes from the window list, not the event). The note for that folder lives in a hidden `.tack.json` inside the folder itself, which is why it survives the folder being moved, copied, or synced to another Mac.
 - If it's any other app, Tack finds the focused window through the Accessibility API and looks the note up in a central store keyed to that window.
 
-Keeping the note glued to its window is the second loop. While a note is showing, Tack reads the window's position on a display link — a timer synced to the screen's own refresh — and repositions the note to match. That's the full rate on a 120 Hz ProMotion display, so the note tracks in lockstep during a drag rather than trailing behind. Every surface is polled the same way: app windows can push their own move notifications over the Accessibility API, but macOS coalesces those mid-drag and the note visibly lagged, so polling won out for Finder folders and app windows alike.
+Keeping the note glued to its window is the second loop. While a note is showing, Tack reads the window's position on a display link — a timer synced to the screen's own refresh — and repositions the note to match. That's the full rate on a 120 Hz ProMotion display, so the note tracks in lockstep during a drag rather than trailing behind. Every surface is polled the same way: app windows can push their own move notifications over the Accessibility API, but macOS coalesces those mid-drag and the note visibly lagged, so polling won out for Finder folders and app windows alike. What gets polled is the window server's own window list — the process compositing the drag, fresh every frame — not the Accessibility API: an accessibility read is a synchronous round-trip into the tracked app's main thread, which is busy handling the drag at exactly the moment it matters, so the note stuttered. Accessibility is only used to *identify* the focused window (its document, title, or URL) on the slow poll, where that latency is harmless.
 
 ### How a note knows which tab it's on
 
@@ -88,7 +98,7 @@ Where this works well, and where it degrades, follows from those sources:
 
 Pinning a note to the window or app level — the pushpin in the note's corner — sidesteps a fuzzy tab identity. And if a note refuses to stick where you expect, `defaults write com.tack.app debugPaths -bool YES` makes Tack log the identity it sees (watch with `log stream --predicate 'process == "Tack"'`).
 
-The note itself is a borderless `NSWindow` floating above everything else — a frosted-glass card (`NSVisualEffectView` blurring whatever sits behind it) with the palette colour laid over as a sheer tint. Its position is stored as an offset from the tracked window's top-left corner, clamped so the note can never escape the window's bounds — and its size is capped to the window too, so a note pinned to a small window shrinks to fit instead of spilling over, and grows back toward its saved size when the window does. The coordinate math (AppleScript measures from the screen's top-left, Cocoa from the bottom-left) lives in pure functions, which is what `--selftest` asserts on without launching any UI.
+The note itself is a borderless `NSWindow` floating above everything else — a frosted-glass card (`NSVisualEffectView` blurring whatever sits behind it) with the palette colour laid over as a sheer tint. Its position is stored as an offset from the tracked window's top-left corner, clamped *before* every move — Tack drives the drag itself rather than letting AppKit move the window and pulling it back after, so the note stops dead at the window's border instead of escaping and snapping back — and its size is capped to the window too, so a note pinned to a small window shrinks to fit instead of spilling over, and grows back toward its saved size when the window does. The coordinate math (AppleScript measures from the screen's top-left, Cocoa from the bottom-left) lives in pure functions, which is what `--selftest` asserts on without launching any UI.
 
 ⌘C/⌘V/⌘Z work inside a note because of a menu you'll never see: an agent app has no menu bar, but macOS still routes key equivalents through the main menu, so Tack installs an invisible Edit menu purely to give the shortcuts somewhere to land.
 
