@@ -84,33 +84,3 @@ enum AXWindows {
         return value
     }
 }
-
-/// Follows one app window by AX move/resize notifications instead of 60fps polling, so the
-/// note glides in lockstep with the window's own movement (the OS posts these live during a drag).
-final class AXWindowTracker {
-    private var observer: AXObserver?
-    private let window: AXUIElement
-    private let onMove: (CGRect) -> Void
-
-    init?(pid: pid_t, window: AXUIElement, onMove: @escaping (CGRect) -> Void) {
-        self.window = window
-        self.onMove = onMove
-        let callback: AXObserverCallback = { _, _, _, refcon in
-            let me = Unmanaged<AXWindowTracker>.fromOpaque(refcon!).takeUnretainedValue()
-            if let b = AXWindows.bounds(of: me.window) { me.onMove(b) }
-        }
-        var obs: AXObserver?
-        guard AXObserverCreate(pid, callback, &obs) == .success, let obs else { return nil }
-        observer = obs
-        let refcon = Unmanaged.passUnretained(self).toOpaque()
-        AXObserverAddNotification(obs, window, kAXWindowMovedNotification as CFString, refcon)
-        AXObserverAddNotification(obs, window, kAXWindowResizedNotification as CFString, refcon)
-        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .commonModes)
-    }
-
-    deinit {
-        if let obs = observer {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .commonModes)
-        }
-    }
-}

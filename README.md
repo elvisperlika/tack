@@ -17,8 +17,8 @@ No dock icon, no Electron, no dependencies — just AppKit and the Accessibility
 
 Plenty of apps let you write a note. Almost none let you stick it *to* something.
 
-|  | Tack | Apple Stickies | Apple Notes | Finder comments | Sticky-note apps |
-|---|:---:|:---:|:---:|:---:|:---:|
+| | Tack | Apple Stickies | Apple Notes | Finder comments | Sticky-note apps |
+| --- | :---: | :---: | :---: | :---: | :---: |
 | Sticks to a specific window or folder | ✅ | ❌ floats on the desktop | ❌ lives in its own app | ✅ folder metadata | ❌ floats on the desktop |
 | Follows the window, appears only in context | ✅ | ❌ always visible | ❌ | ❌ buried in Get Info | ❌ always visible |
 | Per-tab notes (browser URL, Terminal tty) | ✅ | ❌ | ❌ | ❌ | ❌ |

@@ -42,10 +42,6 @@ class Container {
 
     func frame() -> Frame? { nil }
 
-    /// Non-nil = this container pushes move events and the caller should not poll.
-    /// nil = the caller polls `frame()` instead.
-    func tracker(onMove: @escaping (Frame) -> Void) -> AnyObject? { nil }
-
     // MARK: - Lookup
 
     /// Finest → coarsest, first hit wins, reporting the level it hit at.
@@ -88,8 +84,8 @@ final class FinderContainer: Container {
     override func note(at level: Int) -> Note? { NoteStore.load(folder: folder) }
     override func write(_ note: Note, at level: Int) { NoteStore.save(folder: folder, note: note) }
 
-    /// Finder pushes no move events over Apple events, so `tracker` stays nil and the caller
-    /// polls this at 60fps. CGWindowList gives bounds and occluders in the same pass.
+    /// Polled at 60fps to glue the note to the window. CGWindowList gives bounds and
+    /// occluders in the same pass.
     override func frame() -> Frame? {
         guard let info = FinderWatcher.frontFinderWindow() else { return nil }
         return Frame(bounds: info.bounds, covering: info.coveringRects)
@@ -128,12 +124,6 @@ class GenericAppContainer: Container {
     /// empty and the caller's occlusion test collapses to false on its own.
     override func frame() -> Frame? {
         AXWindows.focusedBounds(pid: pid).map { Frame(bounds: $0) }
-    }
-
-    /// App windows glide via AX move/resize notifications instead of 60fps polling.
-    override func tracker(onMove: @escaping (Frame) -> Void) -> AnyObject? {
-        guard let win = AXWindows.focusedWindow(pid: pid) else { return nil }
-        return AXWindowTracker(pid: pid, window: win) { onMove(Frame(bounds: $0)) }
     }
 }
 
