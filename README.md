@@ -31,21 +31,19 @@ If you just want a scratchpad, Stickies is fine. Tack is for notes that belong t
 
 ## Install
 
-**Download:** grab `Tack.zip` from the [latest release](https://github.com/elvisperlika/tack/releases/latest), unzip, move `Tack.app` to Applications and open it. The app isn't notarized, so macOS will balk the first time — allow it under **System Settings → Privacy & Security → Open Anyway**, or clear the quarantine flag yourself:
+Grab `Tack-*.zip` from the [latest release](../../releases/latest), unzip, and **right-click → Open** the first time.
+
+Why the right-click: releases are built by GitHub's CI, which has no Apple Developer certificate, so the app is ad-hoc signed and not notarized. Gatekeeper flags it as from an "unidentified developer" — right-click → Open is the built-in way past that warning, needed once per download. Same cause, second symptom: macOS ties permission grants to the app's signature, and an ad-hoc signature is unique per build, so after downloading an update macOS will re-ask for the permissions below. Everything else — your notes included — carries over untouched.
+
+Building from source avoids both, if you have any codesigning identity in your keychain (`bundle.sh` picks the first one, and keeps the signature — and the permission grants — stable across rebuilds):
 
 ```sh
-xattr -d com.apple.quarantine /Applications/Tack.app
-```
-
-**Or build from source:**
-
-```sh
-git clone https://github.com/elvisperlika/tack.git
+git clone <repo-url>
 cd tack
 ./bundle.sh && open Tack.app
 ```
 
-Requires macOS 14+ (building also needs the Xcode command-line tools).
+Requires macOS 14+ and Xcode command-line tools.
 
 On first launch, macOS asks for permission to control Finder (and later Terminal, for tab notes) and for Accessibility access (needed to track app windows). Grant both; the 📌 appears in the menu bar.
 
