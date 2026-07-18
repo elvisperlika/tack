@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-latest
+    runs-on: macos-15  # Sequoia, pinned — macos-latest drifts to whatever GitHub promotes next
     steps:
       - uses: actions/checkout@v4
 
