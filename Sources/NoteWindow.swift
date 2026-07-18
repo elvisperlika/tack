@@ -22,6 +22,25 @@ private final class MarkdownTextView: NSTextView {
     }
 }
 
+/// Drags the note itself instead of isMovableByWindowBackground: the clamp applies *before*
+/// each move, so the note stops dead at the tracked window's border — AppKit's own drag moved
+/// it out first and let the delegate snap it back, which flickered at the edge.
+private final class DragGlassView: NSVisualEffectView {
+    var onDrag: ((NSPoint) -> Void)?  // proposed window origin, Cocoa coords
+    private var grab = NSPoint.zero  // mouse-to-origin offset captured at mouseDown
+
+    override func mouseDown(with event: NSEvent) {
+        guard let origin = window?.frame.origin else { return }
+        let mouse = NSEvent.mouseLocation
+        grab = NSPoint(x: mouse.x - origin.x, y: mouse.y - origin.y)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let mouse = NSEvent.mouseLocation
+        onDrag?(NSPoint(x: mouse.x - grab.x, y: mouse.y - grab.y))
+    }
+}
+
 /// One reusable floating post-it. Follows the tracked window by keeping a fixed offset (dx, dy)
 /// from its top-left; dragging the note updates and persists that offset.
 final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
@@ -91,7 +110,6 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
             styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
         window.minSize = Self.minSize
         window.level = .floating
-        window.isMovableByWindowBackground = true
         window.isOpaque = false
         window.backgroundColor = .clear  // the rounded glass card below is the whole background
         window.hasShadow = true
@@ -104,7 +122,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         // as a sheer tint over it. The bare tint is the drag area.
         // ponytail: NSVisualEffectView is the glass this deployment target has — Apple's Liquid
         // Glass (NSGlassEffectView) is macOS 26+, and Tack targets 13. Material is taste.
-        let glass = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: w, height: h))
+        let glass = DragGlassView(frame: NSRect(x: 0, y: 0, width: w, height: h))
         glass.material = .popover
         glass.blendingMode = .behindWindow  // blur what's behind the note, not what's inside it
         glass.state = .active  // stay frosted while the note isn't key, which is most of the time
@@ -169,6 +187,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
 
         window.contentView = glass
         super.init()
+        glass.onDrag = { [weak self] origin in self?.dragTo(origin: origin) }
         window.delegate = self
         textView.delegate = self
         closeButton.target = self
@@ -385,10 +404,20 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         }
     }
 
-    // User dragged or resized the note: recompute the offset from the Finder window's top-left,
-    // clamp it back inside the window, then save.
-    // ponytail: snapping back in the delegate rides AppKit's own drag loop; if it ever feels
-    // jittery at the border, take over the drag in the content view's mouseDragged instead.
+    /// Live drag from DragGlassView: turn the proposed origin into an offset, clamp, move.
+    /// The clamp runs before the frame changes, so the note is blocked at the border instead
+    /// of escaping and snapping back.
+    private func dragTo(origin: NSPoint) {
+        (dx, dy) = Coord.offsets(
+            noteMinX: Double(origin.x), noteCocoaMaxY: Double(origin.y + window.frame.height),
+            finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
+            primaryHeight: Screens.primaryHeight())
+        applyPosition()
+        scheduleSave()
+    }
+
+    // User resized the note (drags don't land here — DragGlassView feeds dragTo directly):
+    // recompute the offset from the Finder window's top-left, clamp it back inside, then save.
     private func noteGeometryChanged(resized: Bool) {
         guard !isProgrammaticMove else { return }
         let f = window.frame
