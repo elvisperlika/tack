@@ -43,6 +43,9 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private var tracked = CGRect.zero
     private var dx = 20.0
     private var dy = 40.0
+    /// The size the note wants to be. The shown size is this capped to the tracked window, so a
+    /// note never spills outside the window it's pinned to — and restores when the window grows.
+    private var desired = NoteWindow.defaultSize
     private var isProgrammaticMove = false
     private var active = false  // current folder has a note to show
     private var occluded = false  // the note's spot on the Finder window is covered
@@ -204,16 +207,9 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         colorButton.image = Swatch.image(hex: colorHex)
         textView.string = note.text  // programmatic set does not fire textDidChange
         restyle()  // ...so style it here by hand
-        withProgrammaticMove {
-            window.setFrame(
-                NSRect(
-                    origin: window.frame.origin,
-                    size: NSSize(
-                        width: note.w ?? Self.defaultSize.width,
-                        height: note.h ?? Self.defaultSize.height)),
-                display: false)
-        }
-        applyPosition()  // after the resize: clamping depends on the note's size
+        desired = NSSize(
+            width: note.w ?? Self.defaultSize.width, height: note.h ?? Self.defaultSize.height)
+        applyPosition()  // sizes the note (capped to the tracked window) and positions it
         // Switching between two notes reuses this one window, so pop unconditionally rather than
         // going through applyVisibility — otherwise the incoming note would just teleport in.
         shown = true
@@ -320,14 +316,21 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     }
 
     private func applyPosition() {
-        let c = Coord.clamp(dx: dx, dy: dy, note: window.frame.size, window: tracked.size)
+        let fit = Coord.fit(desired: desired, window: tracked.size)
+        // Let the note shrink below its usual floor when the window is smaller than that floor,
+        // and stop the user resizing it past the window — both keep the note inside the surface.
+        window.minSize = Coord.fit(desired: Self.minSize, window: tracked.size)
+        window.maxSize = tracked.size
+        let c = Coord.clamp(dx: dx, dy: dy, note: fit, window: tracked.size)
         dx = c.dx
         dy = c.dy
+        let topLeft = Coord.cocoaTopLeft(
+            finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
+            dx: dx, dy: dy, primaryHeight: Screens.primaryHeight())
         withProgrammaticMove {
-            window.setFrameTopLeftPoint(
-                Coord.cocoaTopLeft(
-                    finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
-                    dx: dx, dy: dy, primaryHeight: Screens.primaryHeight()))
+            window.setFrame(
+                NSRect(x: topLeft.x, y: topLeft.y - fit.height, width: fit.width, height: fit.height),
+                display: true)
         }
     }
 
@@ -335,9 +338,10 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     // clamp it back inside the window, then save.
     // ponytail: snapping back in the delegate rides AppKit's own drag loop; if it ever feels
     // jittery at the border, take over the drag in the content view's mouseDragged instead.
-    private func noteGeometryChanged() {
+    private func noteGeometryChanged(resized: Bool) {
         guard !isProgrammaticMove else { return }
         let f = window.frame
+        if resized { desired = f.size }  // the user's chosen size — kept even when a small window caps it
         (dx, dy) = Coord.offsets(
             noteMinX: Double(f.minX), noteCocoaMaxY: Double(f.maxY),
             finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
@@ -346,12 +350,12 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         scheduleSave()
     }
 
-    func windowDidMove(_ notification: Notification) { noteGeometryChanged() }
+    func windowDidMove(_ notification: Notification) { noteGeometryChanged(resized: false) }
 
     /// Dragging the top or left edge moves the note's top-left corner without moving the frame's
     /// origin, so windowDidMove never fires — a resize has to recompute the offset too, not just
     /// re-clamp, or those two edges would fight the user.
-    func windowDidResize(_ notification: Notification) { noteGeometryChanged() }
+    func windowDidResize(_ notification: Notification) { noteGeometryChanged(resized: true) }
 
     // MARK: - Text and saving
 
@@ -370,7 +374,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private func scheduleSave() {
         let note = Note(
             text: textView.string, dx: dx, dy: dy, color: colorHex,
-            w: Double(window.frame.width), h: Double(window.frame.height))
+            w: Double(desired.width), h: Double(desired.height))  // intended size, not the capped one
         // snapshot: an in-flight save must use the handler — and level — of the note it was
         // scheduled for, not whichever note is showing 0.5s later
         let save = saveHandler

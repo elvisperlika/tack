@@ -19,6 +19,13 @@ enum Coord {
         (noteMinX - finderLeft, (primaryHeight - noteCocoaMaxY) - finderTop)
     }
 
+    /// The note's on-screen size: never wider or taller than the window it sits inside. Growing
+    /// the window back lets the note grow toward `desired` again — the desired size is remembered
+    /// separately, so a note squeezed into a small window is not permanently shrunk.
+    static func fit(desired: CGSize, window: CGSize) -> CGSize {
+        CGSize(width: min(desired.width, window.width), height: min(desired.height, window.height))
+    }
+
     /// Holds the note inside the tracked window: the offset is clamped so the note's whole
     /// rect stays within the window. A window smaller than the note pins it to the top-left.
     static func clamp(dx: Double, dy: Double, note: CGSize, window: CGSize) -> (

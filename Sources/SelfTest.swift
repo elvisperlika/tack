@@ -7,6 +7,7 @@ enum SelfTest {
         noteStoreRoundTrip()
         appNotesRoundTrip()
         coordFlip()
+        fitToWindow()
         clampToWindow()
         colorHexRoundTrip()
         containerKeys()
@@ -57,6 +58,22 @@ enum SelfTest {
         assert(
             !FileManager.default.fileExists(atPath: NoteStore.fileURL(forFolder: folder).path),
             "file should be gone")
+    }
+
+    static func fitToWindow() {
+        let note = CGSize(width: 220, height: 170)
+
+        // Window bigger than the note -> shown at its desired size.
+        var f = Coord.fit(desired: note, window: CGSize(width: 800, height: 600))
+        assert(f == note, "a big window should not shrink the note: \(f)")
+
+        // Window narrower and shorter than the note -> capped to the window, per axis.
+        f = Coord.fit(desired: note, window: CGSize(width: 100, height: 90))
+        assert(f == CGSize(width: 100, height: 90), "note must never exceed the window: \(f)")
+
+        // Only one axis too small -> only that axis is capped.
+        f = Coord.fit(desired: note, window: CGSize(width: 100, height: 600))
+        assert(f == CGSize(width: 100, height: 170), "only the tight axis should cap: \(f)")
     }
 
     static func clampToWindow() {
