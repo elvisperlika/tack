@@ -122,8 +122,14 @@ class GenericAppContainer: Container {
 
     /// A focused app window is already on top, so nothing covers the note — `covering` stays
     /// empty and the caller's occlusion test collapses to false on its own.
+    ///
+    /// Bounds come from the window server, not AX: an AX read is a synchronous round-trip
+    /// into the app's main thread, which is busy servicing the event loop during a drag, so
+    /// the note trailed and stuttered. CGWindowList is fresh every frame — same source that
+    /// keeps Finder tracking smooth. AX stays as the fallback for windows the list can't see.
     override func frame() -> Frame? {
-        AXWindows.focusedBounds(pid: pid).map { Frame(bounds: $0) }
+        if let rect = WindowServer.frontWindowBounds(pid: pid) { return Frame(bounds: rect) }
+        return AXWindows.focusedBounds(pid: pid).map { Frame(bounds: $0) }
     }
 }
 

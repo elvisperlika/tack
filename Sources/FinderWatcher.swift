@@ -57,3 +57,27 @@ enum FinderWatcher {
         return nil
     }
 }
+
+/// Per-frame window bounds straight from the window server — the process compositing the
+/// screen — so they're fresh even mid-drag, when an AX query would stall on the target
+/// app's busy main thread.
+enum WindowServer {
+    /// Frontmost normal (layer-0) on-screen window owned by `pid`, top-left screen coords.
+    /// The app is frontmost when this is polled, so its first layer-0 window is the focused
+    /// one. ponytail: a sheet can sit above its parent at layer 0 and win — the note pins to
+    /// the sheet until it closes; match on kCGWindowNumber via AX if that ever matters.
+    static func frontWindowBounds(pid: pid_t) -> CGRect? {
+        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
+        else { return nil }
+        for info in list {  // front-to-back
+            guard info[kCGWindowLayer as String] as? Int == 0,
+                info[kCGWindowOwnerPID as String] as? Int == Int(pid),
+                let b = info[kCGWindowBounds as String] as? NSDictionary,
+                let rect = CGRect(dictionaryRepresentation: b)
+            else { continue }
+            return rect
+        }
+        return nil
+    }
+}

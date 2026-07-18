@@ -47,9 +47,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private let window: KeyableWindow
     private let tintView: NSView  // the palette colour, sheer, over the glass
     private let textView: NSTextView
-    private let closeButton: NSButton
-    private let colorButton: NSButton
-    private let levelButton: NSButton  // pin scope (app / window / tab); hidden when there's one level
+    private let menuButton: NSButton  // the note's only button: colour, pin level, delete
     private lazy var paletteMenu = PaletteMenu { [weak self] in self?.apply(color: $0) }
 
     /// The pin levels the note can move between, pushed by the controller so NoteWindow stays
@@ -157,73 +155,69 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         scroll.documentView = textView
         glass.addSubview(scroll)
 
-        // Colour selector, top-left: a swatch button that pops up the palette menu.
-        colorButton = NSButton(frame: NSRect(x: 6, y: h - 24, width: 20, height: 20))
-        colorButton.isBordered = false
-        colorButton.imagePosition = .imageOnly
-        colorButton.autoresizingMask = [.minYMargin, .maxXMargin]  // stays top-left on resize
-        glass.addSubview(colorButton)
-
-        // Pin-level selector, just right of the colour swatch: a pushpin that pops the scope menu.
-        levelButton = NSButton(frame: NSRect(x: 30, y: h - 24, width: 20, height: 20))
-        levelButton.isBordered = false
-        levelButton.imagePosition = .imageOnly
-        levelButton.image = NSImage(
-            systemSymbolName: "pin.fill", accessibilityDescription: "Pin level")
-        levelButton.contentTintColor = NSColor.black.withAlphaComponent(0.35)
-        levelButton.autoresizingMask = [.minYMargin, .maxXMargin]  // stays top-left on resize
-        levelButton.isHidden = true  // shown once setPinLevels reports more than one level
-        glass.addSubview(levelButton)
-
-        // Delete button, top-right (added last so it sits above everything).
-        closeButton = NSButton(frame: NSRect(x: w - 26, y: h - 24, width: 20, height: 20))
-        closeButton.isBordered = false
-        closeButton.imagePosition = .imageOnly
-        closeButton.image = NSImage(
-            systemSymbolName: "trash.fill", accessibilityDescription: "Delete note")
-        closeButton.contentTintColor = NSColor.black.withAlphaComponent(0.35)
-        closeButton.autoresizingMask = [.minYMargin, .minXMargin]  // stays top-right on resize
-        glass.addSubview(closeButton)
+        // The note's one button, top-right: pops the menu with colour, pin level and delete.
+        menuButton = NSButton(frame: NSRect(x: w - 26, y: h - 24, width: 20, height: 20))
+        menuButton.isBordered = false
+        menuButton.imagePosition = .imageOnly
+        menuButton.image = NSImage(
+            systemSymbolName: "ellipsis.circle.fill", accessibilityDescription: "Note menu")
+        menuButton.contentTintColor = NSColor.black.withAlphaComponent(0.35)
+        menuButton.autoresizingMask = [.minYMargin, .minXMargin]  // stays top-right on resize
+        glass.addSubview(menuButton)
 
         window.contentView = glass
         super.init()
         glass.onDrag = { [weak self] origin in self?.dragTo(origin: origin) }
         window.delegate = self
         textView.delegate = self
-        closeButton.target = self
-        closeButton.action = #selector(deleteTapped)
-        colorButton.target = self
-        colorButton.action = #selector(pickColor)
-        colorButton.image = Swatch.image(hex: colorHex)
-        levelButton.target = self
-        levelButton.action = #selector(pickLevel)
+        menuButton.target = self
+        menuButton.action = #selector(openMenu)
         applyTint(Swatch.color(fromHex: colorHex))  // one source of truth for the default yellow
         window.invalidateShadow()
     }
 
-    // MARK: - Pin level
+    // MARK: - Note menu
 
-    /// The scopes this note can pin to. The controller pushes them (with the current one) on every
-    /// show; `< 2` means nothing to choose, so the button hides — matching Finder, which has one level.
+    /// The scopes this note can pin to. The controller pushes them (with the current one) on
+    /// every show; `< 2` means nothing to choose, so the menu skips the pin section — matching
+    /// Finder, which has one level.
     func setPinLevels(_ choices: [(level: Int, label: String)], current: Int, onPick: @escaping (Int) -> Void) {
         pinChoices = choices
         pinCurrent = current
         onPickLevel = onPick
-        levelButton.isHidden = choices.count < 2
     }
 
-    @objc private func pickLevel() {
+    /// Everything the note can do, behind the one button: colour, pin level, delete.
+    /// Rebuilt per open so the palette and pin state are always current.
+    @objc private func openMenu() {
         let menu = NSMenu()
-        for choice in pinChoices {
-            let item = NSMenuItem(
-                title: choice.label, action: #selector(levelChosen(_:)), keyEquivalent: "")
-            item.target = self
-            item.tag = choice.level
-            item.state = choice.level == pinCurrent ? .on : .off
-            menu.addItem(item)
+        let color = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
+        color.image = Swatch.image(hex: colorHex)
+        color.submenu = paletteMenu.menu(currentHex: colorHex)
+        menu.addItem(color)
+        if pinChoices.count >= 2 {
+            let pin = NSMenuItem(title: "Pin", action: nil, keyEquivalent: "")
+            pin.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pin level")
+            let sub = NSMenu()
+            for choice in pinChoices {
+                let item = NSMenuItem(
+                    title: choice.label, action: #selector(levelChosen(_:)), keyEquivalent: "")
+                item.target = self
+                item.tag = choice.level
+                item.state = choice.level == pinCurrent ? .on : .off
+                sub.addItem(item)
+            }
+            pin.submenu = sub
+            menu.addItem(pin)
         }
+        menu.addItem(.separator())
+        let delete = NSMenuItem(
+            title: "Delete Note", action: #selector(deleteTapped), keyEquivalent: "")
+        delete.target = self
+        delete.image = NSImage(systemSymbolName: "trash.fill", accessibilityDescription: "Delete note")
+        menu.addItem(delete)
         menu.popUp(
-            positioning: nil, at: NSPoint(x: 0, y: levelButton.bounds.height + 4), in: levelButton)
+            positioning: nil, at: NSPoint(x: 0, y: menuButton.bounds.height + 4), in: menuButton)
     }
 
     @objc private func levelChosen(_ sender: NSMenuItem) {
@@ -232,10 +226,6 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     }
 
     // MARK: - Colour
-
-    @objc private func pickColor() {
-        paletteMenu.popUp(from: colorButton, currentHex: colorHex)
-    }
 
     /// How much of the palette colour sits over the blur. The material underneath (.popover)
     /// is already milky, so anything much past ~0.35 buries the blur and the card reads as
@@ -251,7 +241,6 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private func apply(color: NSColor) {
         colorHex = Swatch.hex(from: color)
         applyTint(color)
-        colorButton.image = Swatch.image(hex: colorHex)
         scheduleSave()
     }
 
@@ -274,7 +263,6 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         occluded = false  // re-evaluated on the next tracking frame
         colorHex = note.color ?? Swatch.defaultHex
         applyTint(Swatch.color(fromHex: colorHex))
-        colorButton.image = Swatch.image(hex: colorHex)
         textView.string = note.text  // programmatic set does not fire textDidChange
         restyle()  // ...so style it here by hand
         desired = NSSize(
