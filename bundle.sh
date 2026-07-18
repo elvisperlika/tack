@@ -10,8 +10,9 @@ PRODUCT=swift-executable   # SwiftPM product name
 APP=Tack.app
 EXE=Tack                   # executable name inside the bundle (matches CFBundleExecutable)
 
-swift build -c release
-BIN="$(swift build -c release --show-bin-path)/$PRODUCT"
+# BUILD_FLAGS="--arch arm64 --arch x86_64" builds universal (CI does; local stays host-only fast)
+swift build -c release ${BUILD_FLAGS:-}
+BIN="$(swift build -c release ${BUILD_FLAGS:-} --show-bin-path)/$PRODUCT"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"

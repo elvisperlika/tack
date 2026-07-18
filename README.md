@@ -31,7 +31,7 @@ If you just want a scratchpad, Stickies is fine. Tack is for notes that belong t
 
 ## Install
 
-Grab `Tack-*.zip` from the [latest release](../../releases/latest), unzip, and **right-click → Open** the first time.
+Grab the zip for your Mac from the [latest release](../../releases/latest) — `apple-silicon` for M-series, `intel` for Intel — unzip, and **right-click → Open** the first time.
 
 Why the right-click: releases are built by GitHub's CI, which has no Apple Developer certificate, so the app is ad-hoc signed and not notarized. Gatekeeper flags it as from an "unidentified developer" — right-click → Open is the built-in way past that warning, needed once per download. Same cause, second symptom: macOS ties permission grants to the app's signature, and an ad-hoc signature is unique per build, so after downloading an update macOS will re-ask for the permissions below. Everything else — your notes included — carries over untouched.
 
