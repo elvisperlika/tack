@@ -30,7 +30,15 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private let textView: NSTextView
     private let closeButton: NSButton
     private let colorButton: NSButton
+    private let levelButton: NSButton  // pin scope (app / window / tab); hidden when there's one level
     private lazy var paletteMenu = PaletteMenu { [weak self] in self?.apply(color: $0) }
+
+    /// The pin levels the note can move between, pushed by the controller so NoteWindow stays
+    /// ignorant of Container — the same split as the colour menu, which owns *how* one is chosen
+    /// while the controller owns what it *means*.
+    private var pinChoices: [(level: Int, label: String)] = []
+    private var pinCurrent = 0
+    private var onPickLevel: (Int) -> Void = { _ in }
     private let saver = Debouncer(delay: 0.5)  // collapse typing/drag bursts into one write
 
     /// Called after the user deletes the note (so the app can stop tracking it).
@@ -138,6 +146,17 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         colorButton.autoresizingMask = [.minYMargin, .maxXMargin]  // stays top-left on resize
         glass.addSubview(colorButton)
 
+        // Pin-level selector, just right of the colour swatch: a pushpin that pops the scope menu.
+        levelButton = NSButton(frame: NSRect(x: 30, y: h - 24, width: 20, height: 20))
+        levelButton.isBordered = false
+        levelButton.imagePosition = .imageOnly
+        levelButton.image = NSImage(
+            systemSymbolName: "pin.fill", accessibilityDescription: "Pin level")
+        levelButton.contentTintColor = NSColor.black.withAlphaComponent(0.35)
+        levelButton.autoresizingMask = [.minYMargin, .maxXMargin]  // stays top-left on resize
+        levelButton.isHidden = true  // shown once setPinLevels reports more than one level
+        glass.addSubview(levelButton)
+
         // Delete button, top-right (added last so it sits above everything).
         closeButton = NSButton(frame: NSRect(x: w - 26, y: h - 24, width: 20, height: 20))
         closeButton.isBordered = false
@@ -157,8 +176,40 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         colorButton.target = self
         colorButton.action = #selector(pickColor)
         colorButton.image = Swatch.image(hex: colorHex)
+        levelButton.target = self
+        levelButton.action = #selector(pickLevel)
         applyTint(Swatch.color(fromHex: colorHex))  // one source of truth for the default yellow
         window.invalidateShadow()
+    }
+
+    // MARK: - Pin level
+
+    /// The scopes this note can pin to. The controller pushes them (with the current one) on every
+    /// show; `< 2` means nothing to choose, so the button hides — matching Finder, which has one level.
+    func setPinLevels(_ choices: [(level: Int, label: String)], current: Int, onPick: @escaping (Int) -> Void) {
+        pinChoices = choices
+        pinCurrent = current
+        onPickLevel = onPick
+        levelButton.isHidden = choices.count < 2
+    }
+
+    @objc private func pickLevel() {
+        let menu = NSMenu()
+        for choice in pinChoices {
+            let item = NSMenuItem(
+                title: choice.label, action: #selector(levelChosen(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = choice.level
+            item.state = choice.level == pinCurrent ? .on : .off
+            menu.addItem(item)
+        }
+        menu.popUp(
+            positioning: nil, at: NSPoint(x: 0, y: levelButton.bounds.height + 4), in: levelButton)
+    }
+
+    @objc private func levelChosen(_ sender: NSMenuItem) {
+        pinCurrent = sender.tag
+        onPickLevel(sender.tag)
     }
 
     // MARK: - Colour

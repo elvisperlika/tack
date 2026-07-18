@@ -24,7 +24,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var current: Container?
-    private var currentBox: LevelBox?  // the level cell the shown note's save closure captures
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -37,7 +36,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Tack", action: #selector(quit), keyEquivalent: "q"))
         menu.items.forEach { $0.target = self }
-        menu.delegate = self  // pin items are rebuilt per open, from the live path
         item.menu = menu
 
         installEditMenu()
@@ -140,15 +138,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showNote(_ n: Note, frame f: Frame, container: Container, level: Int) {
         let box = LevelBox(level)  // this note's own level cell — see LevelBox
-        currentBox = box
         note.show(note: n, bounds: f.bounds) { edited in container.write(edited, at: box.value) }
+        let choices = (container.minLevel...container.finestLevel).map {
+            (level: $0, label: LevelName.label(level: $0, of: container.path.count))
+        }
+        note.setPinLevels(choices, current: level) { newLevel in
+            guard let hit = container.load() else { return }
+            container.move(hit.note, from: hit.level, to: newLevel)
+            box.value = newLevel  // redirect this note's later edits — same cell the save closure reads
+        }
         apply(f)
         startTracking()
     }
 
     private func hideNote() {
         note.hide()
-        currentBox = nil  // the hidden note's level cell must not outlive it
         stopTracking()
     }
 
@@ -169,38 +173,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         note.focusForEditing()
     }
 
-    /// Move the current note to a coarser (or finer) level. Delete-then-write, so the note
-    /// never exists at two keys at once.
-    @objc private func pin(_ sender: NSMenuItem) {
-        guard let container = current, let hit = container.load() else { return }
-        container.move(hit.note, from: hit.level, to: sender.tag)
-        currentBox?.value = sender.tag  // redirect this note's later edits to the new level
-    }
-
     @objc private func quit() { NSApp.terminate(nil) }
-}
-
-/// The pin items depend on whatever is focused *right now*, so they're rebuilt each time the
-/// menu opens rather than stored.
-extension AppDelegate: NSMenuDelegate {
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.items.filter { $0.tag != 0 || $0.action == #selector(pin(_:)) }
-            .forEach(menu.removeItem)
-
-        guard let container = current, let hit = container.load(),
-            container.finestLevel > container.minLevel  // nothing to choose between
-        else { return }
-
-        var index = 1  // just after "Add note here"
-        for level in container.minLevel...container.finestLevel {
-            let item = NSMenuItem(
-                title: LevelName.label(level: level, of: container.path.count),
-                action: #selector(pin(_:)), keyEquivalent: "")
-            item.target = self
-            item.tag = level
-            item.state = level == hit.level ? .on : .off
-            menu.insertItem(item, at: index)
-            index += 1
-        }
-    }
 }
