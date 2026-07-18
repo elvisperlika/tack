@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "swift-executable",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],  // CADisplayLink for vsync-synced note tracking
     targets: [
         .executableTarget(
             name: "swift-executable",

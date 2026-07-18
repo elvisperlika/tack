@@ -42,10 +42,6 @@ class Container {
 
     func frame() -> Frame? { nil }
 
-    /// Non-nil = this container pushes move events and the caller should not poll.
-    /// nil = the caller polls `frame()` instead.
-    func tracker(onMove: @escaping (Frame) -> Void) -> AnyObject? { nil }
-
     // MARK: - Lookup
 
     /// Finest → coarsest, first hit wins, reporting the level it hit at.
@@ -88,8 +84,8 @@ final class FinderContainer: Container {
     override func note(at level: Int) -> Note? { NoteStore.load(folder: folder) }
     override func write(_ note: Note, at level: Int) { NoteStore.save(folder: folder, note: note) }
 
-    /// Finder pushes no move events over Apple events, so `tracker` stays nil and the caller
-    /// polls this at 60fps. CGWindowList gives bounds and occluders in the same pass.
+    /// Polled at 60fps to glue the note to the window. CGWindowList gives bounds and
+    /// occluders in the same pass.
     override func frame() -> Frame? {
         guard let info = FinderWatcher.frontFinderWindow() else { return nil }
         return Frame(bounds: info.bounds, covering: info.coveringRects)
@@ -126,14 +122,14 @@ class GenericAppContainer: Container {
 
     /// A focused app window is already on top, so nothing covers the note — `covering` stays
     /// empty and the caller's occlusion test collapses to false on its own.
+    ///
+    /// Bounds come from the window server, not AX: an AX read is a synchronous round-trip
+    /// into the app's main thread, which is busy servicing the event loop during a drag, so
+    /// the note trailed and stuttered. CGWindowList is fresh every frame — same source that
+    /// keeps Finder tracking smooth. AX stays as the fallback for windows the list can't see.
     override func frame() -> Frame? {
-        AXWindows.focusedBounds(pid: pid).map { Frame(bounds: $0) }
-    }
-
-    /// App windows glide via AX move/resize notifications instead of 60fps polling.
-    override func tracker(onMove: @escaping (Frame) -> Void) -> AnyObject? {
-        guard let win = AXWindows.focusedWindow(pid: pid) else { return nil }
-        return AXWindowTracker(pid: pid, window: win) { onMove(Frame(bounds: $0)) }
+        if let rect = WindowServer.frontWindowBounds(pid: pid) { return Frame(bounds: rect) }
+        return AXWindows.focusedBounds(pid: pid).map { Frame(bounds: $0) }
     }
 }
 

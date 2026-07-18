@@ -41,7 +41,7 @@ enum Swatch {
 /// and grows via the "+" in the colour menu.
 enum Palette {
     private static let key = "paletteColors"
-    static let presets = ["FFEB73", "FFB3BA", "AEC6FF"]  // yellow, pink, blue
+    static let presets = ["FFEB73", "FFB3BA", "AEC6FF", "FFFFFF"]  // yellow, pink, blue, Notion white
 
     static var colors: [String] { UserDefaults.standard.stringArray(forKey: key) ?? presets }
 
@@ -65,7 +65,8 @@ private final class ColorSwatchButton: NSButton {
     var hex = ""
 }
 
-/// The colour-picking UI: the swatch grid, the "Remove" submenu, and the "+" system-panel flow.
+/// The colour-picking UI: the swatch grid (each swatch wears a tiny × to delete it) and the
+/// "+" system-panel flow.
 /// Its one job is reporting the chosen colour through `onPick` — it never touches the note, so
 /// NoteWindow keeps owning what a colour *means* and this class only owns how one is chosen.
 final class PaletteMenu: NSObject {
@@ -74,36 +75,19 @@ final class PaletteMenu: NSObject {
 
     init(onPick: @escaping (NSColor) -> Void) { self.onPick = onPick }
 
-    /// Pop up below `button`. The menu is rebuilt per open so palette edits show immediately.
-    func popUp(from button: NSButton, currentHex: String) {
+    /// The colour menu, rebuilt per call so palette edits show immediately. Hangs off the
+    /// note's single menu button as a submenu.
+    func menu(currentHex: String) -> NSMenu {
         self.currentHex = currentHex
         let menu = NSMenu()
         menu.addItem(gridItem())
         menu.addItem(.separator())
         let plus = NSMenuItem(
-            title: "Aggiungi colore…", action: #selector(addColor), keyEquivalent: "")
+            title: "Add new…", action: #selector(addColor), keyEquivalent: "")
         plus.target = self
         plus.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Add colour")
         menu.addItem(plus)
-
-        if Palette.colors.count > 1 {  // a "Remove" submenu of swatches (never empty the palette)
-            let remove = NSMenuItem(title: "Rimuovi colore", action: nil, keyEquivalent: "")
-            remove.image = NSImage(
-                systemSymbolName: "minus", accessibilityDescription: "Remove colour")
-            let sub = NSMenu()
-            for hex in Palette.colors {
-                let it = NSMenuItem(
-                    title: "", action: #selector(removeColor(_:)), keyEquivalent: "")
-                it.target = self
-                it.image = Swatch.image(hex: hex)
-                it.representedObject = hex
-                sub.addItem(it)
-            }
-            remove.submenu = sub
-            menu.addItem(remove)
-        }
-        menu.popUp(
-            positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+        return menu
     }
 
     // Colour swatches laid out in a grid, max 5 per row.
@@ -128,6 +112,19 @@ final class PaletteMenu: NSObject {
             btn.target = self
             btn.action = #selector(swatchClicked(_:))
             view.addSubview(btn)
+            if colors.count > 1 {  // no × when removing it would empty the palette
+                let x = ColorSwatchButton(
+                    frame: NSRect(x: cellX + cell - 13, y: cellY + cell - 13, width: 12, height: 12))
+                x.hex = hex
+                x.isBordered = false
+                x.imagePosition = .imageOnly
+                x.image = NSImage(
+                    systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Remove colour")
+                x.contentTintColor = NSColor.black.withAlphaComponent(0.55)
+                x.target = self
+                x.action = #selector(removeSwatchClicked(_:))
+                view.addSubview(x)  // added after the swatch, so it sits on top of its corner
+            }
         }
         let item = NSMenuItem()
         item.view = view
@@ -140,9 +137,10 @@ final class PaletteMenu: NSObject {
         onPick(Swatch.color(fromHex: swatch.hex))
     }
 
-    @objc private func removeColor(_ sender: NSMenuItem) {
-        guard let hex = sender.representedObject as? String else { return }
-        Palette.remove(hex)
+    @objc private func removeSwatchClicked(_ sender: NSButton) {
+        sender.enclosingMenuItem?.menu?.cancelTracking()  // menus are rebuilt per open
+        guard let swatch = sender as? ColorSwatchButton else { return }
+        Palette.remove(swatch.hex)
     }
 
     // "+": pick a new colour in the system panel; it previews live and joins the palette on close.

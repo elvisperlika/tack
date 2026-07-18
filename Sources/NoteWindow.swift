@@ -22,15 +22,40 @@ private final class MarkdownTextView: NSTextView {
     }
 }
 
+/// Drags the note itself instead of isMovableByWindowBackground: the clamp applies *before*
+/// each move, so the note stops dead at the tracked window's border — AppKit's own drag moved
+/// it out first and let the delegate snap it back, which flickered at the edge.
+private final class DragGlassView: NSVisualEffectView {
+    var onDrag: ((NSPoint) -> Void)?  // proposed window origin, Cocoa coords
+    private var grab = NSPoint.zero  // mouse-to-origin offset captured at mouseDown
+
+    override func mouseDown(with event: NSEvent) {
+        guard let origin = window?.frame.origin else { return }
+        let mouse = NSEvent.mouseLocation
+        grab = NSPoint(x: mouse.x - origin.x, y: mouse.y - origin.y)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let mouse = NSEvent.mouseLocation
+        onDrag?(NSPoint(x: mouse.x - grab.x, y: mouse.y - grab.y))
+    }
+}
+
 /// One reusable floating post-it. Follows the tracked window by keeping a fixed offset (dx, dy)
 /// from its top-left; dragging the note updates and persists that offset.
 final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private let window: KeyableWindow
     private let tintView: NSView  // the palette colour, sheer, over the glass
     private let textView: NSTextView
-    private let closeButton: NSButton
-    private let colorButton: NSButton
+    private let menuButton: NSButton  // the note's only button: colour, pin level, delete
     private lazy var paletteMenu = PaletteMenu { [weak self] in self?.apply(color: $0) }
+
+    /// The pin levels the note can move between, pushed by the controller so NoteWindow stays
+    /// ignorant of Container — the same split as the colour menu, which owns *how* one is chosen
+    /// while the controller owns what it *means*.
+    private var pinChoices: [(level: Int, label: String)] = []
+    private var pinCurrent = 0
+    private var onPickLevel: (Int) -> Void = { _ in }
     private let saver = Debouncer(delay: 0.5)  // collapse typing/drag bursts into one write
 
     /// Called after the user deletes the note (so the app can stop tracking it).
@@ -43,6 +68,9 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private var tracked = CGRect.zero
     private var dx = 20.0
     private var dy = 40.0
+    /// The size the note wants to be. The shown size is this capped to the tracked window, so a
+    /// note never spills outside the window it's pinned to — and restores when the window grows.
+    private var desired = NoteWindow.defaultSize
     private var isProgrammaticMove = false
     private var active = false  // current folder has a note to show
     private var occluded = false  // the note's spot on the Finder window is covered
@@ -80,7 +108,6 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
             styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
         window.minSize = Self.minSize
         window.level = .floating
-        window.isMovableByWindowBackground = true
         window.isOpaque = false
         window.backgroundColor = .clear  // the rounded glass card below is the whole background
         window.hasShadow = true
@@ -93,7 +120,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         // as a sheer tint over it. The bare tint is the drag area.
         // ponytail: NSVisualEffectView is the glass this deployment target has — Apple's Liquid
         // Glass (NSGlassEffectView) is macOS 26+, and Tack targets 13. Material is taste.
-        let glass = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: w, height: h))
+        let glass = DragGlassView(frame: NSRect(x: 0, y: 0, width: w, height: h))
         glass.material = .popover
         glass.blendingMode = .behindWindow  // blur what's behind the note, not what's inside it
         glass.state = .active  // stay frosted while the note isn't key, which is most of the time
@@ -128,41 +155,77 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         scroll.documentView = textView
         glass.addSubview(scroll)
 
-        // Colour selector, top-left: a swatch button that pops up the palette menu.
-        colorButton = NSButton(frame: NSRect(x: 6, y: h - 24, width: 20, height: 20))
-        colorButton.isBordered = false
-        colorButton.imagePosition = .imageOnly
-        colorButton.autoresizingMask = [.minYMargin, .maxXMargin]  // stays top-left on resize
-        glass.addSubview(colorButton)
-
-        // Delete button, top-right (added last so it sits above everything).
-        closeButton = NSButton(frame: NSRect(x: w - 26, y: h - 24, width: 20, height: 20))
-        closeButton.isBordered = false
-        closeButton.imagePosition = .imageOnly
-        closeButton.image = NSImage(
-            systemSymbolName: "trash.fill", accessibilityDescription: "Delete note")
-        closeButton.contentTintColor = NSColor.black.withAlphaComponent(0.35)
-        closeButton.autoresizingMask = [.minYMargin, .minXMargin]  // stays top-right on resize
-        glass.addSubview(closeButton)
+        // The note's one button, top-right: pops the menu with colour, pin level and delete.
+        menuButton = NSButton(frame: NSRect(x: w - 26, y: h - 24, width: 20, height: 20))
+        menuButton.isBordered = false
+        menuButton.imagePosition = .imageOnly
+        menuButton.image = NSImage(
+            systemSymbolName: "ellipsis.circle.fill", accessibilityDescription: "Note menu")
+        menuButton.contentTintColor = NSColor.black.withAlphaComponent(0.35)
+        menuButton.autoresizingMask = [.minYMargin, .minXMargin]  // stays top-right on resize
+        glass.addSubview(menuButton)
 
         window.contentView = glass
         super.init()
+        glass.onDrag = { [weak self] origin in self?.dragTo(origin: origin) }
         window.delegate = self
         textView.delegate = self
-        closeButton.target = self
-        closeButton.action = #selector(deleteTapped)
-        colorButton.target = self
-        colorButton.action = #selector(pickColor)
-        colorButton.image = Swatch.image(hex: colorHex)
+        menuButton.target = self
+        menuButton.action = #selector(openMenu)
         applyTint(Swatch.color(fromHex: colorHex))  // one source of truth for the default yellow
         window.invalidateShadow()
     }
 
-    // MARK: - Colour
+    // MARK: - Note menu
 
-    @objc private func pickColor() {
-        paletteMenu.popUp(from: colorButton, currentHex: colorHex)
+    /// The scopes this note can pin to. The controller pushes them (with the current one) on
+    /// every show; `< 2` means nothing to choose, so the menu skips the pin section — matching
+    /// Finder, which has one level.
+    func setPinLevels(_ choices: [(level: Int, label: String)], current: Int, onPick: @escaping (Int) -> Void) {
+        pinChoices = choices
+        pinCurrent = current
+        onPickLevel = onPick
     }
+
+    /// Everything the note can do, behind the one button: colour, pin level, delete.
+    /// Rebuilt per open so the palette and pin state are always current.
+    @objc private func openMenu() {
+        let menu = NSMenu()
+        let color = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
+        color.image = Swatch.image(hex: colorHex)
+        color.submenu = paletteMenu.menu(currentHex: colorHex)
+        menu.addItem(color)
+        if pinChoices.count >= 2 {
+            let pin = NSMenuItem(title: "Pin", action: nil, keyEquivalent: "")
+            pin.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pin level")
+            let sub = NSMenu()
+            for choice in pinChoices {
+                let item = NSMenuItem(
+                    title: choice.label, action: #selector(levelChosen(_:)), keyEquivalent: "")
+                item.target = self
+                item.tag = choice.level
+                item.state = choice.level == pinCurrent ? .on : .off
+                sub.addItem(item)
+            }
+            pin.submenu = sub
+            menu.addItem(pin)
+        }
+        menu.addItem(.separator())
+        let delete = NSMenuItem(
+            title: "Delete Note", action: #selector(deleteTapped), keyEquivalent: "")
+        delete.target = self
+        delete.image = NSImage(systemSymbolName: "trash.fill", accessibilityDescription: "Delete note")
+        menu.addItem(delete)
+        menu.popUp(
+            positioning: nil, at: NSPoint(x: 0, y: menuButton.bounds.height + 4), in: menuButton)
+    }
+
+    @objc private func levelChosen(_ sender: NSMenuItem) {
+        pinCurrent = sender.tag
+        onPickLevel(sender.tag)
+    }
+
+    // MARK: - Colour
 
     /// How much of the palette colour sits over the blur. The material underneath (.popover)
     /// is already milky, so anything much past ~0.35 buries the blur and the card reads as
@@ -178,7 +241,6 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private func apply(color: NSColor) {
         colorHex = Swatch.hex(from: color)
         applyTint(color)
-        colorButton.image = Swatch.image(hex: colorHex)
         scheduleSave()
     }
 
@@ -201,19 +263,11 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         occluded = false  // re-evaluated on the next tracking frame
         colorHex = note.color ?? Swatch.defaultHex
         applyTint(Swatch.color(fromHex: colorHex))
-        colorButton.image = Swatch.image(hex: colorHex)
         textView.string = note.text  // programmatic set does not fire textDidChange
         restyle()  // ...so style it here by hand
-        withProgrammaticMove {
-            window.setFrame(
-                NSRect(
-                    origin: window.frame.origin,
-                    size: NSSize(
-                        width: note.w ?? Self.defaultSize.width,
-                        height: note.h ?? Self.defaultSize.height)),
-                display: false)
-        }
-        applyPosition()  // after the resize: clamping depends on the note's size
+        desired = NSSize(
+            width: note.w ?? Self.defaultSize.width, height: note.h ?? Self.defaultSize.height)
+        applyPosition()  // sizes the note (capped to the tracked window) and positions it
         // Switching between two notes reuses this one window, so pop unconditionally rather than
         // going through applyVisibility — otherwise the incoming note would just teleport in.
         shown = true
@@ -295,6 +349,13 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
 
     // MARK: - Geometry
 
+    /// A display link synced to whatever display the note is on, so the caller samples the
+    /// window's position in vsync phase at the real refresh rate (120Hz on ProMotion) instead
+    /// of a fixed 60fps timer. Caller owns it: add to a run loop, invalidate to stop.
+    func makeDisplayLink(target: Any, selector: Selector) -> CADisplayLink {
+        window.displayLink(target: target, selector: selector)
+    }
+
     /// The tracked window moved or resized — keep the offset, reposition. No-op if unchanged.
     /// A resize re-clamps, so shrinking the window pulls the note back inside with it.
     func updateWindow(bounds: CGRect) {
@@ -313,24 +374,42 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     }
 
     private func applyPosition() {
-        let c = Coord.clamp(dx: dx, dy: dy, note: window.frame.size, window: tracked.size)
+        let fit = Coord.fit(desired: desired, window: tracked.size)
+        // Let the note shrink below its usual floor when the window is smaller than that floor,
+        // and stop the user resizing it past the window — both keep the note inside the surface.
+        window.minSize = Coord.fit(desired: Self.minSize, window: tracked.size)
+        window.maxSize = tracked.size
+        let c = Coord.clamp(dx: dx, dy: dy, note: fit, window: tracked.size)
         dx = c.dx
         dy = c.dy
+        let topLeft = Coord.cocoaTopLeft(
+            finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
+            dx: dx, dy: dy, primaryHeight: Screens.primaryHeight())
         withProgrammaticMove {
-            window.setFrameTopLeftPoint(
-                Coord.cocoaTopLeft(
-                    finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
-                    dx: dx, dy: dy, primaryHeight: Screens.primaryHeight()))
+            window.setFrame(
+                NSRect(x: topLeft.x, y: topLeft.y - fit.height, width: fit.width, height: fit.height),
+                display: true)
         }
     }
 
-    // User dragged or resized the note: recompute the offset from the Finder window's top-left,
-    // clamp it back inside the window, then save.
-    // ponytail: snapping back in the delegate rides AppKit's own drag loop; if it ever feels
-    // jittery at the border, take over the drag in the content view's mouseDragged instead.
-    private func noteGeometryChanged() {
+    /// Live drag from DragGlassView: turn the proposed origin into an offset, clamp, move.
+    /// The clamp runs before the frame changes, so the note is blocked at the border instead
+    /// of escaping and snapping back.
+    private func dragTo(origin: NSPoint) {
+        (dx, dy) = Coord.offsets(
+            noteMinX: Double(origin.x), noteCocoaMaxY: Double(origin.y + window.frame.height),
+            finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
+            primaryHeight: Screens.primaryHeight())
+        applyPosition()
+        scheduleSave()
+    }
+
+    // User resized the note (drags don't land here — DragGlassView feeds dragTo directly):
+    // recompute the offset from the Finder window's top-left, clamp it back inside, then save.
+    private func noteGeometryChanged(resized: Bool) {
         guard !isProgrammaticMove else { return }
         let f = window.frame
+        if resized { desired = f.size }  // the user's chosen size — kept even when a small window caps it
         (dx, dy) = Coord.offsets(
             noteMinX: Double(f.minX), noteCocoaMaxY: Double(f.maxY),
             finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
@@ -339,12 +418,12 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         scheduleSave()
     }
 
-    func windowDidMove(_ notification: Notification) { noteGeometryChanged() }
+    func windowDidMove(_ notification: Notification) { noteGeometryChanged(resized: false) }
 
     /// Dragging the top or left edge moves the note's top-left corner without moving the frame's
     /// origin, so windowDidMove never fires — a resize has to recompute the offset too, not just
     /// re-clamp, or those two edges would fight the user.
-    func windowDidResize(_ notification: Notification) { noteGeometryChanged() }
+    func windowDidResize(_ notification: Notification) { noteGeometryChanged(resized: true) }
 
     // MARK: - Text and saving
 
@@ -363,7 +442,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private func scheduleSave() {
         let note = Note(
             text: textView.string, dx: dx, dy: dy, color: colorHex,
-            w: Double(window.frame.width), h: Double(window.frame.height))
+            w: Double(desired.width), h: Double(desired.height))  // intended size, not the capped one
         // snapshot: an in-flight save must use the handler — and level — of the note it was
         // scheduled for, not whichever note is showing 0.5s later
         let save = saveHandler
