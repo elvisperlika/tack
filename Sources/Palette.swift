@@ -37,29 +37,6 @@ enum Swatch {
     }
 }
 
-/// The app-wide list of palette colours, persisted in UserDefaults. Starts with 3 presets
-/// and grows via the "+" in the colour menu.
-enum Palette {
-    private static let key = "paletteColors"
-    static let presets = ["FFEB73", "FFB3BA", "AEC6FF", "FFFFFF"]  // yellow, pink, blue, Notion white
-
-    static var colors: [String] { UserDefaults.standard.stringArray(forKey: key) ?? presets }
-
-    static func add(_ hex: String) {
-        var list = colors
-        guard !list.contains(hex) else { return }
-        list.append(hex)
-        UserDefaults.standard.set(list, forKey: key)
-    }
-
-    static func remove(_ hex: String) {
-        var list = colors
-        guard list.count > 1, let i = list.firstIndex(of: hex) else { return }  // keep at least one
-        list.remove(at: i)
-        UserDefaults.standard.set(list, forKey: key)
-    }
-}
-
 /// A palette swatch button that remembers which colour it is.
 private final class ColorSwatchButton: NSButton {
     var hex = ""
@@ -71,7 +48,7 @@ private final class ColorSwatchButton: NSButton {
 /// NoteWindow keeps owning what a colour *means* and this class only owns how one is chosen.
 final class PaletteMenu: NSObject {
     private let onPick: (NSColor) -> Void
-    private var currentHex = Swatch.defaultHex  // what the "+" panel opens preloaded with
+    private var currentHex = NotePreferences.shared.defaultColorHex  // what the "+" panel opens preloaded with
 
     init(onPick: @escaping (NSColor) -> Void) { self.onPick = onPick }
 
@@ -92,7 +69,7 @@ final class PaletteMenu: NSObject {
 
     // Colour swatches laid out in a grid, max 5 per row.
     private func gridItem() -> NSMenuItem {
-        let colors = Palette.colors
+        let colors = NotePreferences.shared.palette
         let cols = min(colors.count, 5)
         let rows = (colors.count + 4) / 5
         let cell: CGFloat = 26
@@ -140,7 +117,7 @@ final class PaletteMenu: NSObject {
     @objc private func removeSwatchClicked(_ sender: NSButton) {
         sender.enclosingMenuItem?.menu?.cancelTracking()  // menus are rebuilt per open
         guard let swatch = sender as? ColorSwatchButton else { return }
-        Palette.remove(swatch.hex)
+        NotePreferences.shared.removeColor(swatch.hex)
     }
 
     // "+": pick a new colour in the system panel; it previews live and joins the palette on close.
@@ -162,6 +139,6 @@ final class PaletteMenu: NSObject {
         NotificationCenter.default.removeObserver(
             self, name: NSWindow.willCloseNotification, object: NSColorPanel.shared)
         NSColorPanel.shared.setTarget(nil)
-        Palette.add(Swatch.hex(from: NSColorPanel.shared.color))
+        NotePreferences.shared.addColor(Swatch.hex(from: NSColorPanel.shared.color))
     }
 }

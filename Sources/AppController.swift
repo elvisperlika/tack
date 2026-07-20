@@ -15,9 +15,13 @@ enum Main {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let note = NoteWindow()
     private var statusItem: NSStatusItem?
+    /// Picks the colour new notes start with. Retained here because it's the target of its own
+    /// swatch buttons and colour panel; its submenu is rebuilt on each menu open (`menuNeedsUpdate`).
+    private lazy var defaultColorMenu = PaletteMenu { NotePreferences.shared.defaultColorHex = Swatch.hex(from: $0) }
+    private var defaultColorItem: NSMenuItem?
     private var pollTimer: Timer?  // slow: which surface is focused (~0.4s)
     private var trackLink: CADisplayLink? {  // vsync glue: the shown note follows its window
         didSet { oldValue?.invalidate() }  // an outlived link would keep firing
@@ -34,8 +38,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(
             NSMenuItem(title: "Add note here", action: #selector(addNote), keyEquivalent: ""))
         menu.addItem(.separator())
+        let defColor = NSMenuItem(title: "Default color", action: nil, keyEquivalent: "")
+        menu.addItem(defColor)
+        defaultColorItem = defColor
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Tack", action: #selector(quit), keyEquivalent: "q"))
         menu.items.forEach { $0.target = self }
+        menu.delegate = self  // rebuilds the Default color submenu on open
         item.menu = menu
 
         installEditMenu()
@@ -45,6 +54,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             self?.pollTarget()
         }
+    }
+
+    /// Rebuild the Default color submenu on open so it shows the current pick and any palette edits.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard let item = defaultColorItem else { return }
+        let hex = NotePreferences.shared.defaultColorHex
+        item.image = Swatch.image(hex: hex)
+        item.submenu = defaultColorMenu.menu(currentHex: hex)
     }
 
     /// ⌘C/⌘V/⌘Z only reach a text view through the main menu's key equivalents. An agent app has

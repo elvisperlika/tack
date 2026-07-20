@@ -22,6 +22,7 @@ enum SelfTest {
         markdownTodoBox()
         noteSizeIsOptional()
         urlNormalization()
+        notePreferencesPalette()
         print("✅ all self-tests passed")
     }
 
@@ -33,6 +34,28 @@ enum SelfTest {
 
         AppNotes.save(key: key, note: Note(text: "", dx: 12, dy: 34))
         assert(AppNotes.load(key: key) == nil, "empty text should delete the app note")
+    }
+
+    static func notePreferencesPalette() {
+        let suite = "selftest." + UUID().uuidString  // isolated: never touches the real palette
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = NotePreferences(defaults: defaults)
+
+        let base = prefs.palette
+        prefs.addColor("123456")
+        assert(prefs.palette == base + ["123456"], "addColor should append")
+        prefs.addColor("123456")
+        assert(prefs.palette == base + ["123456"], "addColor should dedupe")
+        prefs.removeColor("123456")
+        assert(prefs.palette == base, "removeColor should drop the colour")
+
+        // Never empty the palette: removing the last colour is a no-op.
+        var only = prefs.palette
+        while only.count > 1 { prefs.removeColor(only[0]); only = prefs.palette }
+        let last = only[0]
+        prefs.removeColor(last)
+        assert(prefs.palette == [last], "palette must keep at least one colour")
     }
 
     static func colorHexRoundTrip() {

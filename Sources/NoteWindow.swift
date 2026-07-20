@@ -61,7 +61,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     /// Called after the user deletes the note (so the app can stop tracking it).
     var onDelete: (() -> Void)?
 
-    private var colorHex = Swatch.defaultHex
+    private var colorHex = NotePreferences.shared.defaultColorHex
     private var saveHandler: (Note) -> Void = { _ in }  // where the current note persists
     /// The tracked window, top-left screen coords. One value, because its origin and size only
     /// ever change together — three loose fields drifting apart was a bug waiting to happen.
@@ -70,15 +70,11 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private var dy = 40.0
     /// The size the note wants to be. The shown size is this capped to the tracked window, so a
     /// note never spills outside the window it's pinned to — and restores when the window grows.
-    private var desired = NoteWindow.defaultSize
+    private var desired = NotePreferences.shared.defaultSize
     private var isProgrammaticMove = false
     private var active = false  // current folder has a note to show
     private var occluded = false  // the note's spot on the Finder window is covered
     private var shown = false  // what the last pop animated toward (the window stays visible while popping out)
-
-    static let defaultSize = NSSize(width: 220, height: 170)
-    /// Any smaller and the swatch and trash buttons start eating the text.
-    static let minSize = NSSize(width: 160, height: 120)
 
     /// Rounds the *material*. A .behindWindow blur is shaped by the window server from this
     /// mask's alpha, not by the layer, so `cornerRadius` alone leaves a square pane of frost
@@ -97,8 +93,8 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     }
 
     override init() {
-        let w = Self.defaultSize.width
-        let h = Self.defaultSize.height
+        let w = NotePreferences.shared.defaultSize.width
+        let h = NotePreferences.shared.defaultSize.height
         let strip: CGFloat = 28
         let radius: CGFloat = 12
         // .resizable on a borderless window gets edge-dragging from AppKit for free — no grow
@@ -106,7 +102,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         window = KeyableWindow(
             contentRect: NSRect(x: 0, y: 0, width: w, height: h),
             styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
-        window.minSize = Self.minSize
+        window.minSize = NotePreferences.shared.minSize
         window.level = .floating
         window.isOpaque = false
         window.backgroundColor = .clear  // the rounded glass card below is the whole background
@@ -261,12 +257,13 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         self.tracked = bounds
         active = true
         occluded = false  // re-evaluated on the next tracking frame
-        colorHex = note.color ?? Swatch.defaultHex
+        colorHex = note.color ?? NotePreferences.shared.defaultColorHex
         applyTint(Swatch.color(fromHex: colorHex))
         textView.string = note.text  // programmatic set does not fire textDidChange
         restyle()  // ...so style it here by hand
         desired = NSSize(
-            width: note.w ?? Self.defaultSize.width, height: note.h ?? Self.defaultSize.height)
+            width: note.w ?? NotePreferences.shared.defaultSize.width,
+            height: note.h ?? NotePreferences.shared.defaultSize.height)
         applyPosition()  // sizes the note (capped to the tracked window) and positions it
         // Switching between two notes reuses this one window, so pop unconditionally rather than
         // going through applyVisibility — otherwise the incoming note would just teleport in.
@@ -377,7 +374,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         let fit = Coord.fit(desired: desired, window: tracked.size)
         // Let the note shrink below its usual floor when the window is smaller than that floor,
         // and stop the user resizing it past the window — both keep the note inside the surface.
-        window.minSize = Coord.fit(desired: Self.minSize, window: tracked.size)
+        window.minSize = Coord.fit(desired: NotePreferences.shared.minSize, window: tracked.size)
         window.maxSize = tracked.size
         // Display-only clamp: stored dx/dy keep the note's true spot, mirroring `desired` for
         // size. Writing the clamp back means one frame of tracking a bogus window rewrites
