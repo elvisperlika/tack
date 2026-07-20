@@ -50,6 +50,12 @@ enum FinderWatcher {
                 let rect = CGRect(dictionaryRepresentation: b)
             else { continue }
             if info[kCGWindowOwnerName as String] as? String == "Finder" {
+                // Finder's inline-rename editor is a real borderless layer-0 Finder window
+                // floating above the folder window while a name is edited — tracking it would
+                // teleport the note into a text strip. No folder window is anywhere near this
+                // small. Skipped entirely: it's not an occluder either, it sits *inside* the
+                // folder view. ponytail: size heuristic; match kCGWindowNumber if it misfires.
+                if rect.width < 200 || rect.height < 80 { continue }
                 return FinderWindowInfo(bounds: rect, coveringRects: covering)
             }
             covering.append(rect)  // a normal window above the front Finder folder window

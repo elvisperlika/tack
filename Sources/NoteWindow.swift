@@ -379,12 +379,14 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         // and stop the user resizing it past the window — both keep the note inside the surface.
         window.minSize = Coord.fit(desired: Self.minSize, window: tracked.size)
         window.maxSize = tracked.size
+        // Display-only clamp: stored dx/dy keep the note's true spot, mirroring `desired` for
+        // size. Writing the clamp back means one frame of tracking a bogus window rewrites
+        // where the note lives for good. The user paths (drag, resize) clamp-and-store
+        // themselves — there the border genuinely is the new position.
         let c = Coord.clamp(dx: dx, dy: dy, note: fit, window: tracked.size)
-        dx = c.dx
-        dy = c.dy
         let topLeft = Coord.cocoaTopLeft(
             finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
-            dx: dx, dy: dy, primaryHeight: Screens.primaryHeight())
+            dx: c.dx, dy: c.dy, primaryHeight: Screens.primaryHeight())
         withProgrammaticMove {
             window.setFrame(
                 NSRect(x: topLeft.x, y: topLeft.y - fit.height, width: fit.width, height: fit.height),
@@ -400,8 +402,16 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
             noteMinX: Double(origin.x), noteCocoaMaxY: Double(origin.y + window.frame.height),
             finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
             primaryHeight: Screens.primaryHeight())
+        storeClamped()
         applyPosition()
         scheduleSave()
+    }
+
+    /// Clamp the stored offset itself — only for user actions, where the border really is
+    /// the note's new position. Programmatic tracking must never do this (see applyPosition).
+    private func storeClamped() {
+        let fit = Coord.fit(desired: desired, window: tracked.size)
+        (dx, dy) = Coord.clamp(dx: dx, dy: dy, note: fit, window: tracked.size)
     }
 
     // User resized the note (drags don't land here — DragGlassView feeds dragTo directly):
@@ -414,7 +424,8 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
             noteMinX: Double(f.minX), noteCocoaMaxY: Double(f.maxY),
             finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
             primaryHeight: Screens.primaryHeight())
-        applyPosition()  // clamps dx/dy and snaps the note back if the drag left the window
+        storeClamped()
+        applyPosition()
         scheduleSave()
     }
 
