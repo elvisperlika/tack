@@ -7,6 +7,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "swift-executable",
+            // Explicit because sources now live in subfolders of Sources/, not directly under it,
+            // so SwiftPM's single-target auto-detection no longer applies. Subfolders are compiled
+            // recursively into the one target — they are not separate targets.
+            path: "Sources",
             // ponytail: AppKit is main-thread; skip Swift 6 strict-concurrency ceremony
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

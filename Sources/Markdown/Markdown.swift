@@ -107,6 +107,27 @@ enum Markdown {
         return out
     }
 
+    /// Inline marker ranges to collapse to zero width — every inline span the caret isn't
+    /// currently inside, so `**bold**` reads as bold until you move into it to edit. Line markers
+    /// (`#`, `-`, `[ ]`) are never hidden: collapsing those needs a glyph swap, not just hiding.
+    /// Pure, so `--selftest` covers the reveal-on-caret logic without a window.
+    static func hiddenMarkers(in text: String, selection: NSRange) -> [NSRange] {
+        var out: [NSRange] = []
+        for span in spans(in: text) {
+            switch span.style {
+            case .bold, .italic, .code, .strike: break
+            default: continue  // heading/bullet/todo markers stay put
+            }
+            let lo = (span.markers.map(\.location) + [span.content.location]).min()!
+            let hi = (span.markers.map(\.upperBound) + [span.content.upperBound]).max()!
+            // Reveal when the caret/selection touches the span's extent (edges included).
+            let reveal = selection.location <= hi && NSMaxRange(selection) >= lo
+            if reveal { continue }
+            out.append(contentsOf: span.markers.filter { $0.length > 0 })
+        }
+        return out
+    }
+
     /// The `[ ]` / `[x]` range under `index`, or nil if the click landed anywhere else.
     static func todoBox(in text: String, at index: Int) -> NSRange? {
         let ns = text as NSString

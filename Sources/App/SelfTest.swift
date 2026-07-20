@@ -23,6 +23,7 @@ enum SelfTest {
         noteSizeIsOptional()
         urlNormalization()
         notePreferencesPalette()
+        markdownHiddenMarkers()
         print("✅ all self-tests passed")
     }
 
@@ -56,6 +57,23 @@ enum SelfTest {
         let last = only[0]
         prefs.removeColor(last)
         assert(prefs.palette == [last], "palette must keep at least one colour")
+    }
+
+    static func markdownHiddenMarkers() {
+        let t = "**bold** x"  // bold span extent is [0,8): ** at [0,2) and [6,8)
+        assert(
+            Markdown.hiddenMarkers(in: t, selection: NSRange(location: 10, length: 0))
+                == [NSRange(location: 0, length: 2), NSRange(location: 6, length: 2)],
+            "markers should collapse when the caret is outside the span")
+        assert(
+            Markdown.hiddenMarkers(in: t, selection: NSRange(location: 3, length: 0)).isEmpty,
+            "markers should reveal when the caret is inside the span")
+        assert(
+            Markdown.hiddenMarkers(in: t, selection: NSRange(location: 0, length: 0)).isEmpty,
+            "the caret at a span edge should reveal its markers")
+        assert(
+            Markdown.hiddenMarkers(in: "# Title", selection: NSRange(location: 7, length: 0)).isEmpty,
+            "heading # is a line marker, never hidden")
     }
 
     static func colorHexRoundTrip() {

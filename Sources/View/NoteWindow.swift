@@ -47,6 +47,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private let window: KeyableWindow
     private let tintView: NSView  // the palette colour, sheer, over the glass
     private let textView: NSTextView
+    private let hider = MarkerHider()  // collapses markdown markers the caret isn't on
     private let menuButton: NSButton  // the note's only button: colour, pin level, delete
     private lazy var paletteMenu = PaletteMenu { [weak self] in self?.apply(color: $0) }
 
@@ -138,6 +139,9 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = false
         scroll.autoresizingMask = [.width, .height]
+        // Default stack, so the text view owns (and retains) its own storage/layout/container.
+        // Setting `layoutManager.delegate = hider` after super.init forces TextKit 1 compatibility
+        // mode, which is what makes `hider`'s shouldGenerateGlyphs hook fire.
         textView = MarkdownTextView(frame: scroll.bounds)
         textView.drawsBackground = false
         textView.font = MarkdownStyle.baseFont
@@ -163,6 +167,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
 
         window.contentView = glass
         super.init()
+        textView.layoutManager?.delegate = hider  // weak; hider is retained above
         glass.onDrag = { [weak self] origin in self?.dragTo(origin: origin) }
         window.delegate = self
         textView.delegate = self
@@ -440,11 +445,27 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private func restyle() {
         guard let ts = textView.textStorage else { return }
         MarkdownStyle.apply(to: ts)
+        refreshHiddenMarkers()
+    }
+
+    /// Recompute which markers collapse (it depends on the caret) and re-run glyph generation so
+    /// the layout manager consults `hider` again. Cheap for a post-it; runs on edit and caret move.
+    private func refreshHiddenMarkers() {
+        guard let lm = textView.layoutManager, let ts = textView.textStorage else { return }
+        hider.hidden = Markdown.hiddenMarkers(in: ts.string, selection: textView.selectedRange())
+        let full = NSRange(location: 0, length: ts.length)
+        lm.invalidateGlyphs(forCharacterRange: full, changeInLength: 0, actualCharacterRange: nil)
+        lm.invalidateLayout(forCharacterRange: full, actualCharacterRange: nil)
     }
 
     func textDidChange(_ notification: Notification) {
         restyle()
         scheduleSave()
+    }
+
+    // Caret moved: markers reveal/hide even when the text itself didn't change.
+    func textViewDidChangeSelection(_ notification: Notification) {
+        refreshHiddenMarkers()
     }
 
     private func scheduleSave() {
