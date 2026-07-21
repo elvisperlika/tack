@@ -15,11 +15,16 @@ private final class MarkdownTextView: NSTextView {
         }
         let ticked = (string as NSString).substring(with: box) == "[ ]" ? "[x]" : "[ ]"
         // shouldChangeText/didChangeText registers the undo *and* posts the change notification,
-        // so the existing textDidChange path restyles and saves. No second save path to keep honest.
+        // so the textDidChange path re-strikes the todo and saves. No second save path to keep honest.
         guard shouldChangeText(in: box, replacementString: ticked) else { return }
         textStorage?.replaceCharacters(in: box, with: ticked)
         didChangeText()
     }
+
+    // ⌘B / ⌘I reach here through the responder chain from the invisible Edit menu (the text view
+    // is first responder). Target-nil menu items find these on whatever text view is focused.
+    @objc func toggleBold(_ sender: Any?) { MarkdownInput.toggle(.bold, self) }
+    @objc func toggleItalic(_ sender: Any?) { MarkdownInput.toggle(.italic, self) }
 }
 
 /// Drags the note itself instead of isMovableByWindowBackground: the clamp applies *before*
@@ -47,8 +52,8 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private let window: KeyableWindow
     private let tintView: NSView  // the palette colour, sheer, over the glass
     private let textView: NSTextView
-    private let hider = MarkerHider()  // collapses markdown markers the caret isn't on
     private let menuButton: NSButton  // the note's only button: colour, pin level, delete
+    private var reforming = false  // guards the input rules' own edits from re-entering textDidChange
     private lazy var paletteMenu = PaletteMenu { [weak self] in self?.apply(color: $0) }
 
     /// The pin levels the note can move between, pushed by the controller so NoteWindow stays
@@ -139,14 +144,13 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = false
         scroll.autoresizingMask = [.width, .height]
-        // Default stack, so the text view owns (and retains) its own storage/layout/container.
-        // Setting `layoutManager.delegate = hider` after super.init forces TextKit 1 compatibility
-        // mode, which is what makes `hider`'s shouldGenerateGlyphs hook fire.
         textView = MarkdownTextView(frame: scroll.bounds)
         textView.drawsBackground = false
         textView.font = MarkdownStyle.baseFont
         textView.textColor = .black
-        textView.isRichText = false
+        textView.isRichText = true  // emphasis rides as attributes; markdown lives only on disk
+        textView.isAutomaticTextReplacementEnabled = false  // no smart quotes/dashes mangling markdown
+        textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.allowsUndo = true  // off by default — without it ⌘Z reaches an empty undo stack
         textView.textContainerInset = NSSize(width: 6, height: 6)
         textView.autoresizingMask = [.width]
@@ -167,7 +171,6 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
 
         window.contentView = glass
         super.init()
-        textView.layoutManager?.delegate = hider  // weak; hider is retained above
         glass.onDrag = { [weak self] origin in self?.dragTo(origin: origin) }
         window.delegate = self
         textView.delegate = self
@@ -264,8 +267,10 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         occluded = false  // re-evaluated on the next tracking frame
         colorHex = note.color ?? NotePreferences.shared.defaultColorHex
         applyTint(Swatch.color(fromHex: colorHex))
-        textView.string = note.text  // programmatic set does not fire textDidChange
-        restyle()  // ...so style it here by hand
+        // Load markdown as rich text (markers consumed into attributes). Programmatic, so it
+        // fires no textDidChange — nothing to save, and no input rule should run on a load.
+        textView.textStorage?.setAttributedString(MarkdownDocument.parse(note.text))
+        textView.typingAttributes = MarkdownStyle.base
         desired = NSSize(
             width: note.w ?? NotePreferences.shared.defaultSize.width,
             height: note.h ?? NotePreferences.shared.defaultSize.height)
@@ -440,37 +445,30 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
 
     // MARK: - Text and saving
 
-    /// Style the markdown where it sits. The buffer keeps every marker — they just fade — so
-    /// `textView.string` stays the note's source and nothing needs serialising back.
-    private func restyle() {
-        guard let ts = textView.textStorage else { return }
-        MarkdownStyle.apply(to: ts)
-        refreshHiddenMarkers()
-    }
-
-    /// Recompute which markers collapse (it depends on the caret) and re-run glyph generation so
-    /// the layout manager consults `hider` again. Cheap for a post-it; runs on edit and caret move.
-    private func refreshHiddenMarkers() {
-        guard let lm = textView.layoutManager, let ts = textView.textStorage else { return }
-        hider.hidden = Markdown.hiddenMarkers(in: ts.string, selection: textView.selectedRange())
-        let full = NSRange(location: 0, length: ts.length)
-        lm.invalidateGlyphs(forCharacterRange: full, changeInLength: 0, actualCharacterRange: nil)
-        lm.invalidateLayout(forCharacterRange: full, actualCharacterRange: nil)
-    }
-
+    /// Run the markdown input rules, then keep bullet/todo styling fresh. `reforming` guards the
+    /// rules' own edits (which post didChangeText) from re-entering and running the rules again.
     func textDidChange(_ notification: Notification) {
-        restyle()
+        if !reforming {
+            reforming = true
+            MarkdownInput.autoformat(textView)
+            MarkdownInput.headingRule(textView)
+            if let ts = textView.textStorage { MarkdownStyle.styleLists(ts) }
+            reforming = false
+        }
         scheduleSave()
     }
 
-    // Caret moved: markers reveal/hide even when the text itself didn't change.
-    func textViewDidChangeSelection(_ notification: Notification) {
-        refreshHiddenMarkers()
+    /// Enter starts a body line; Backspace at a heading's start un-headings it. Everything else
+    /// falls through to the text view's own handling.
+    func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        MarkdownInput.handle(selector, textView)
     }
 
     private func scheduleSave() {
+        // Serialize the rich text back to markdown — the buffer has no markers, disk does.
+        let text = textView.textStorage.map(MarkdownDocument.serialize) ?? textView.string
         let note = Note(
-            text: textView.string, dx: dx, dy: dy, color: colorHex,
+            text: text, dx: dx, dy: dy, color: colorHex,
             w: Double(desired.width), h: Double(desired.height))  // intended size, not the capped one
         // snapshot: an in-flight save must use the handler — and level — of the note it was
         // scheduled for, not whichever note is showing 0.5s later

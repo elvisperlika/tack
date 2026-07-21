@@ -18,12 +18,13 @@ enum SelfTest {
         levelLabels()
         debouncerCollapses()
         markdownSpans()
-        markdownStyling()
+        markdownParse()
+        markdownRoundTrip()
+        markdownInlineClosing()
         markdownTodoBox()
         noteSizeIsOptional()
         urlNormalization()
         notePreferencesPalette()
-        markdownHiddenMarkers()
         print("✅ all self-tests passed")
     }
 
@@ -57,23 +58,6 @@ enum SelfTest {
         let last = only[0]
         prefs.removeColor(last)
         assert(prefs.palette == [last], "palette must keep at least one colour")
-    }
-
-    static func markdownHiddenMarkers() {
-        let t = "**bold** x"  // bold span extent is [0,8): ** at [0,2) and [6,8)
-        assert(
-            Markdown.hiddenMarkers(in: t, selection: NSRange(location: 10, length: 0))
-                == [NSRange(location: 0, length: 2), NSRange(location: 6, length: 2)],
-            "markers should collapse when the caret is outside the span")
-        assert(
-            Markdown.hiddenMarkers(in: t, selection: NSRange(location: 3, length: 0)).isEmpty,
-            "markers should reveal when the caret is inside the span")
-        assert(
-            Markdown.hiddenMarkers(in: t, selection: NSRange(location: 0, length: 0)).isEmpty,
-            "the caret at a span edge should reveal its markers")
-        assert(
-            Markdown.hiddenMarkers(in: "# Title", selection: NSRange(location: 7, length: 0)).isEmpty,
-            "heading # is a line marker, never hidden")
     }
 
     static func colorHexRoundTrip() {
@@ -309,48 +293,70 @@ extension SelfTest {
         assert(styles("# Shopping\n- milk") == [.heading(1), .bullet], "line rules match per line")
     }
 
-    static func markdownStyling() {
-        func font(_ ts: NSTextStorage, _ i: Int) -> NSFont? {
-            ts.attribute(.font, at: i, effectiveRange: nil) as? NSFont
+    static func markdownInlineClosing() {
+        // The autoformat trigger: a pattern is consumed only when its closing marker is under the
+        // caret, so typing the final delimiter is what fires it.
+        let b = Markdown.inlineClosingAt(8, in: "**bold**")
+        assert(b?.style == .bold && b?.range == NSRange(location: 0, length: 8), "bold closes at 8")
+        assert(Markdown.inlineClosingAt(5, in: "**bold**") == nil, "no completion mid-span")
+
+        let c = Markdown.inlineClosingAt(3, in: "`x`")
+        assert(c?.style == .code && c?.range == NSRange(location: 0, length: 3), "code closes at 3")
+
+        assert(Markdown.inlineClosingAt(3, in: "*i* z")?.style == .italic, "italic closes at its '*'")
+        assert(Markdown.inlineClosingAt(5, in: "*i* z") == nil, "caret past the span doesn't fire")
+    }
+
+    static func markdownParse() {
+        func font(_ a: NSAttributedString, _ i: Int) -> NSFont? {
+            a.attribute(.font, at: i, effectiveRange: nil) as? NSFont
         }
-        func color(_ ts: NSTextStorage, _ i: Int) -> NSColor? {
-            ts.attribute(.foregroundColor, at: i, effectiveRange: nil) as? NSColor
+        func isBold(_ f: NSFont?) -> Bool {
+            f.map { NSFontManager.shared.traits(of: $0).contains(.boldFontMask) } ?? false
         }
 
-        // "# A **b**" — 0:'#' 2:'A' 4,5:'**' 6:'b'
-        let ts = NSTextStorage(string: "# A **b**")
-        MarkdownStyle.apply(to: ts)
+        // Inline markers are consumed into an attribute; the asterisks are gone from the string.
+        let bold = MarkdownDocument.parse("**milk**")
+        assert(bold.string == "milk", "the ** should be gone: \(bold.string.debugDescription)")
+        assert(
+            (bold.attribute(.tackInline, at: 0, effectiveRange: nil) as? String) == "bold"
+                && isBold(font(bold, 0)), "content should be marked and rendered bold")
 
-        assert(font(ts, 2)?.pointSize == 18, "h1 should be 18pt: \(String(describing: font(ts, 2)))")
-        // The compose guarantee: bold inside a heading keeps the heading's size. If addTrait ever
-        // sets an absolute font instead of converting, this drops to 14 and the heading breaks.
-        assert(
-            font(ts, 6)?.pointSize == 18,
-            "bold inside a heading should stay heading-sized: \(String(describing: font(ts, 6)))")
-        assert(
-            NSFontManager.shared.traits(of: font(ts, 6)!).contains(.boldFontMask),
-            "and should actually be bold")
-        assert(color(ts, 0) == MarkdownStyle.dim, "the '#' marker should be dimmed")
-        assert(color(ts, 4) == MarkdownStyle.dim, "the '**' markers should be dimmed")
-        assert(color(ts, 2) == .black, "heading text should not be dimmed")
+        // '#' is consumed too; the line carries a heading level and heading font.
+        let h = MarkdownDocument.parse("# Title")
+        assert(h.string == "Title", "the '# ' should be gone: \(h.string.debugDescription)")
+        assert((h.attribute(.tackHeading, at: 0, effectiveRange: nil) as? Int) == 1, "h1 level")
+        assert(font(h, 0)?.pointSize == 18, "h1 should be 18pt")
 
-        // Restyling is a full reset, not an accumulation: markdown removed => attributes gone.
-        ts.replaceCharacters(in: NSRange(location: 0, length: ts.length), with: "plain")
-        MarkdownStyle.apply(to: ts)
-        assert(font(ts, 0) == MarkdownStyle.baseFont, "stale styling should be reset")
-        assert(color(ts, 0) == .black, "stale dimming should be reset")
+        // Heading + bold compose: bold inside a heading stays heading-sized.
+        let hb = MarkdownDocument.parse("# **Big**")
+        assert(hb.string == "Big", "both markers gone: \(hb.string.debugDescription)")
+        assert(font(hb, 0)?.pointSize == 18 && isBold(font(hb, 0)), "heading-sized and bold")
 
-        // A ticked todo strikes its content through; an unticked one leaves it alone.
-        let done = NSTextStorage(string: "- [x] pay")
-        MarkdownStyle.apply(to: done)
+        // Bullets keep their literal marker (Phase 1); the dash is dimmed, not removed.
+        let bullet = MarkdownDocument.parse("- milk")
+        assert(bullet.string == "- milk", "bullet marker stays literal: \(bullet.string.debugDescription)")
         assert(
-            done.attribute(.strikethroughStyle, at: 6, effectiveRange: nil) != nil,
-            "a ticked todo should strike its text")
-        let open = NSTextStorage(string: "- [ ] pay")
-        MarkdownStyle.apply(to: open)
-        assert(
-            open.attribute(.strikethroughStyle, at: 6, effectiveRange: nil) == nil,
-            "an unticked todo should not")
+            (bullet.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor) == MarkdownStyle.dim,
+            "the '- ' should be dimmed")
+    }
+
+    static func markdownRoundTrip() {
+        // The backward-compat guarantee: a note saved as markdown must survive parse -> serialize
+        // unchanged, so .tack.json stays markdown and pre-Notion notes keep working.
+        let corpus = [
+            "**bold**", "*italic*", "`code`", "~~strike~~",
+            "# Heading", "## Two", "### Three",
+            "- item", "- [ ] task", "- [x] done",
+            "# **Big**", "- **milk** 2L",
+            "plain text",
+            "# Title\nsome **bold** here\n- a\n- b",
+            "",
+        ]
+        for md in corpus {
+            let round = MarkdownDocument.serialize(MarkdownDocument.parse(md))
+            assert(round == md, "round-trip changed \(md.debugDescription) -> \(round.debugDescription)")
+        }
     }
 
     static func noteSizeIsOptional() {

@@ -53,7 +53,7 @@ On first launch, macOS asks for permission to control Finder (and later Terminal
 2. Click 📌 → **Add note here**.
 3. Type. Drag the note where you want it — it stays glued to that window, and it can't leave it: dragging toward an edge stops the note at the border. Drag any edge to resize it; the size is saved with the note, and it's capped to the window — shrink the window below the note and the note shrinks to fit rather than spilling over, then grows back when the window does.
 
-Notes style markdown as you type: `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `#` headings, `-` bullets, and `- [ ]` todo lists. Click a checkbox to tick it. The markers stay in the text and just fade, so what gets saved is exactly what you typed.
+Notes edit like Notion. Type `**bold**`, `*italic*`, `` `code` ``, `~~strike~~` or a `#`/`##`/`###` heading and the markup is consumed — you see the formatting, not the symbols, even while editing. ⌘B/⌘I toggle emphasis; backspace at the start of a heading turns it back into body text. `-` bullets and `- [ ]` todo lists still show their dimmed markers (click a checkbox to tick it). On disk a note is plain markdown, so nothing about the file format changed and older notes just work.
 
 Everything else is behind the note's single ⊙ button, top-right:
 

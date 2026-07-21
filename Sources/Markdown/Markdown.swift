@@ -10,6 +10,10 @@ import Foundation
 ///
 /// ponytail: regexes, not a CommonMark parser. One level of nesting, no tables, no blockquotes,
 /// no reference links. Reach for apple/swift-markdown only if a post-it ever needs real documents.
+/// The four inline emphases the rich editor consumes into attributes (bold/italic/code/strike).
+/// String-backed so it can be stored as an attribute value and read back on serialize.
+enum InlineStyle: String { case bold, italic, code, strike }
+
 enum Markdown {
     enum Style: Equatable {
         case bold, italic, code, strike, bullet
@@ -107,25 +111,24 @@ enum Markdown {
         return out
     }
 
-    /// Inline marker ranges to collapse to zero width — every inline span the caret isn't
-    /// currently inside, so `**bold**` reads as bold until you move into it to edit. Line markers
-    /// (`#`, `-`, `[ ]`) are never hidden: collapsing those needs a glyph swap, not just hiding.
-    /// Pure, so `--selftest` covers the reveal-on-caret logic without a window.
-    static func hiddenMarkers(in text: String, selection: NSRange) -> [NSRange] {
-        var out: [NSRange] = []
-        for span in spans(in: text) {
+    /// An inline span whose full markup (both delimiters) ends exactly at `caret` in `line`, if
+    /// any — the hook the input rule uses to consume `**bold**` the instant the closing `**` is
+    /// typed. Returns the whole marked range and its style. Pure, so `--selftest` can cover it.
+    static func inlineClosingAt(_ caret: Int, in line: String) -> (range: NSRange, style: InlineStyle)? {
+        for span in spans(in: line) {
+            let style: InlineStyle
             switch span.style {
-            case .bold, .italic, .code, .strike: break
-            default: continue  // heading/bullet/todo markers stay put
+            case .bold: style = .bold
+            case .italic: style = .italic
+            case .code: style = .code
+            case .strike: style = .strike
+            default: continue  // line rules aren't typed-to-complete
             }
             let lo = (span.markers.map(\.location) + [span.content.location]).min()!
             let hi = (span.markers.map(\.upperBound) + [span.content.upperBound]).max()!
-            // Reveal when the caret/selection touches the span's extent (edges included).
-            let reveal = selection.location <= hi && NSMaxRange(selection) >= lo
-            if reveal { continue }
-            out.append(contentsOf: span.markers.filter { $0.length > 0 })
+            if hi == caret { return (NSRange(location: lo, length: hi - lo), style) }
         }
-        return out
+        return nil
     }
 
     /// The `[ ]` / `[x]` range under `index`, or nil if the click landed anywhere else.

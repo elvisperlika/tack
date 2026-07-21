@@ -76,6 +76,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ("Copy", #selector(NSText.copy(_:)), "c"),
             ("Paste", #selector(NSText.paste(_:)), "v"),
             ("Select All", #selector(NSText.selectAll(_:)), "a"),
+            ("Bold", Selector(("toggleBold:")), "b"),  // MarkdownTextView implements these
+            ("Italic", Selector(("toggleItalic:")), "i"),
         ]
         // Target stays nil on purpose: each one walks the responder chain to whatever text view
         // is focused, which is exactly the note being edited.

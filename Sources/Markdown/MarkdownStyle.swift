@@ -1,70 +1,73 @@
 import AppKit
 
-/// Paints `Markdown.spans` onto a text storage: content gets the styling, markers get faded.
-/// Separate from both Markdown (which stays pure Foundation) and NoteWindow (so --selftest can
-/// assert on the result without a window).
+extension NSAttributedString.Key {
+    /// Semantic marks the rich buffer carries instead of literal markup. Appearance is derived
+    /// from them (`MarkdownStyle.visual`); `MarkdownDocument.serialize` reads them back to markdown.
+    static let tackInline = NSAttributedString.Key("tackInline")  // value: InlineStyle.rawValue (String)
+    static let tackHeading = NSAttributedString.Key("tackHeading")  // value: Int (1...3)
+}
+
+/// The one place a semantic mark becomes a font/colour, so a mark looks the same however it was
+/// produced — parsed from disk, typed via an input rule, or toggled with ⌘B. Bullets and todos are
+/// the exception: they keep literal `- ` / `[ ]` text, dimmed here by `styleLists`.
 enum MarkdownStyle {
     static let baseFont = NSFont.systemFont(ofSize: 14)
-    /// Matches the trash button's tint. Black at low alpha reads as "faded" against any palette
-    /// colour, so markers don't need to track the note's background.
+    static let codeFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    static let textColor = NSColor.black
+    /// Matches the trash button's tint. Black at low alpha reads as "faded" over any palette colour.
     static let dim = NSColor.black.withAlphaComponent(0.28)
-    static let base: [NSAttributedString.Key: Any] = [
-        .font: baseFont, .foregroundColor: NSColor.black,
-    ]
 
-    // ponytail: full reparse per keystroke; a post-it is a few hundred chars. Move to an
-    // NSTextStorage delegate over the edited range only if a note ever gets long.
-    static func apply(to ts: NSTextStorage) {
-        ts.beginEditing()
-        ts.setAttributes(base, range: NSRange(location: 0, length: ts.length))
+    static var base: [NSAttributedString.Key: Any] { [.font: baseFont, .foregroundColor: textColor] }
+
+    static func headingFont(_ level: Int) -> NSFont {
+        let sizes: [CGFloat] = [18, 16, 15]
+        return NSFont.systemFont(ofSize: sizes[min(max(level, 1), 3) - 1], weight: .bold)
+    }
+
+    /// Font + strikethrough for a run carrying these marks. Composes: bold inside a heading stays
+    /// heading-sized because the trait is converted onto the heading font, not set absolutely.
+    static func visual(inline: InlineStyle?, heading: Int?) -> [NSAttributedString.Key: Any] {
+        var font = heading.map(headingFont) ?? baseFont
+        var attrs: [NSAttributedString.Key: Any] = [.foregroundColor: textColor]
+        switch inline {
+        case .bold: font = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+        case .italic: font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
+        case .code: font = codeFont
+        case .strike: attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+        case .none: break
+        }
+        attrs[.font] = font
+        return attrs
+    }
+
+    /// Visual attributes plus the semantic marks themselves — what to write when creating or
+    /// restyling a run, so the two never drift. Used by the input rules and typing attributes.
+    static func attributes(inline: InlineStyle?, heading: Int?) -> [NSAttributedString.Key: Any] {
+        var a = visual(inline: inline, heading: heading)
+        if let inline { a[.tackInline] = inline.rawValue }
+        if let heading { a[.tackHeading] = heading }
+        return a
+    }
+
+    /// Dim the literal `- ` / `[ ]` of bullet and todo lines and strike ticked todos — the one bit
+    /// of styling that isn't attribute-driven, reapplied after each edit. The rich buffer has no
+    /// inline/heading markers, so `spans` here only ever matches bullets and todos.
+    static func styleLists(_ ts: NSTextStorage) {
         for span in Markdown.spans(in: ts.string) {
-            apply(span.style, to: span.content, in: ts)
-            for m in span.markers where m.length > 0 {
-                ts.addAttribute(.foregroundColor, value: dim, range: m)
+            switch span.style {
+            case .bullet:
+                for m in span.markers { ts.addAttribute(.foregroundColor, value: dim, range: m) }
+            case .todo(let done):
+                for m in span.markers { ts.addAttribute(.foregroundColor, value: dim, range: m) }
+                if done {
+                    ts.addAttribute(
+                        .strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: span.content)
+                    ts.addAttribute(.foregroundColor, value: dim, range: span.content)
+                } else {
+                    ts.removeAttribute(.strikethroughStyle, range: span.content)
+                }
+            default: break  // inline/heading are attribute-driven, not literal markers
             }
-        }
-        ts.endEditing()
-    }
-
-    private static func apply(_ style: Markdown.Style, to range: NSRange, in ts: NSTextStorage) {
-        guard range.length > 0 else { return }
-        switch style {
-        case .bold: addTrait(.boldFontMask, to: range, in: ts)
-        case .italic: addTrait(.italicFontMask, to: range, in: ts)
-        case .code:
-            ts.addAttribute(
-                .font, value: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-                range: range)
-        case .strike:
-            ts.addAttribute(
-                .strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
-        case .heading(let level):
-            let sizes: [CGFloat] = [18, 16, 15]
-            ts.addAttribute(
-                .font,
-                value: NSFont.systemFont(ofSize: sizes[min(max(level, 1), 3) - 1], weight: .bold),
-                range: range)
-        case .bullet:
-            break  // the dimmed "- " is the whole effect
-        case .todo(let done):
-            guard done else { break }
-            ts.addAttribute(
-                .strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
-            ts.addAttribute(.foregroundColor, value: dim, range: range)
-        }
-    }
-
-    /// Compose the trait onto whatever font is already there, so bold inside a heading stays
-    /// heading-sized instead of flattening to body text. Collect first: mutating .font while
-    /// enumerating .font is asking for trouble.
-    private static func addTrait(_ trait: NSFontTraitMask, to range: NSRange, in ts: NSTextStorage) {
-        var runs: [(NSFont, NSRange)] = []
-        ts.enumerateAttribute(.font, in: range) { value, r, _ in
-            runs.append((value as? NSFont ?? baseFont, r))
-        }
-        for (font, r) in runs {
-            ts.addAttribute(
-                .font, value: NSFontManager.shared.convert(font, toHaveTrait: trait), range: r)
         }
     }
 }
