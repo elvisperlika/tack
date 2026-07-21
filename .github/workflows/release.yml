@@ -11,30 +11,50 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: macos-15 # Sequoia, pinned — macos-latest drifts to whatever GitHub promotes next
+  # One runner per arch: Apple Silicon builds native on macos-latest; Intel is pinned to macos-15
+  # so the x86_64 cross-build stays on a known-good runner as GitHub promotes newer images.
+  build:
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            label: apple-silicon
+            runner: macos-latest
+          - arch: x86_64
+            label: intel
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
-      # bundle.sh rebuilds Tack.app from scratch each run, so build+zip per arch in sequence.
-      # ditto keeps the bundle's structure and metadata intact.
-      - name: Build Tack.app (Apple Silicon)
+      # bundle.sh rebuilds Tack.app from scratch; ditto keeps the bundle's structure/metadata intact.
+      - name: Build Tack.app (${{ matrix.label }})
         run: |
-          BUILD_FLAGS="--arch arm64" SIGN_ID=- ./bundle.sh
-          ditto -c -k --keepParent Tack.app "Tack-$GITHUB_REF_NAME-apple-silicon.zip"
+          BUILD_FLAGS="--arch ${{ matrix.arch }}" SIGN_ID=- ./bundle.sh
+          ditto -c -k --keepParent Tack.app "Tack-$GITHUB_REF_NAME-${{ matrix.label }}.zip"
 
-      - name: Build Tack.app (Intel)
-        run: |
-          BUILD_FLAGS="--arch x86_64" SIGN_ID=- ./bundle.sh
-          ditto -c -k --keepParent Tack.app "Tack-$GITHUB_REF_NAME-intel.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tack-${{ matrix.label }}
+          path: "Tack-*-${{ matrix.label }}.zip"
+
+  # Both zips in hand, cut the release once (a Linux runner is enough — no macOS work here).
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            "Tack-$GITHUB_REF_NAME-apple-silicon.zip" \
-            "Tack-$GITHUB_REF_NAME-intel.zip" \
+            "dist/Tack-$GITHUB_REF_NAME-apple-silicon.zip" \
+            "dist/Tack-$GITHUB_REF_NAME-intel.zip" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             --notes "**apple-silicon** for M-series Macs, **intel** for Intel Macs. Unzip, then **right-click → Open** on first launch (the build is not notarized)."
