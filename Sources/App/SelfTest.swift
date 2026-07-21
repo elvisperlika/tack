@@ -21,7 +21,6 @@ enum SelfTest {
         markdownParse()
         markdownRoundTrip()
         markdownInlineClosing()
-        markdownTodoBox()
         noteSizeIsOptional()
         urlNormalization()
         notePreferencesPalette()
@@ -333,12 +332,20 @@ extension SelfTest {
         assert(hb.string == "Big", "both markers gone: \(hb.string.debugDescription)")
         assert(font(hb, 0)?.pointSize == 18 && isBold(font(hb, 0)), "heading-sized and bold")
 
-        // Bullets keep their literal marker (Phase 1); the dash is dimmed, not removed.
+        // Bullets/todos are consumed too: the `- `/`[ ]` markdown becomes a rendered glyph, and a
+        // ticked todo strikes its content. Content starts at index 2 (glyph + space).
         let bullet = MarkdownDocument.parse("- milk")
-        assert(bullet.string == "- milk", "bullet marker stays literal: \(bullet.string.debugDescription)")
+        assert(bullet.string == "\u{2022} milk", "bullet becomes a • glyph: \(bullet.string.debugDescription)")
+
+        let open = MarkdownDocument.parse("- [ ] task")
+        assert(open.string == "\u{2610} task", "open todo becomes ☐: \(open.string.debugDescription)")
+        assert(open.attribute(.strikethroughStyle, at: 2, effectiveRange: nil) == nil, "open todo not struck")
+
+        let done = MarkdownDocument.parse("- [x] done")
+        assert(done.string == "\u{2611} done", "done todo becomes ☑: \(done.string.debugDescription)")
         assert(
-            (bullet.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor) == MarkdownStyle.dim,
-            "the '- ' should be dimmed")
+            done.attribute(.strikethroughStyle, at: 2, effectiveRange: nil) != nil,
+            "a done todo strikes its content")
     }
 
     static func markdownRoundTrip() {
@@ -375,15 +382,6 @@ extension SelfTest {
         assert(try! JSONDecoder().decode(Note.self, from: data) == sized, "size should round-trip")
     }
 
-    static func markdownTodoBox() {
-        // "- [ ] pay rent" — 0:'-' 1:' ' 2:'[' 3:' ' 4:']', so the box is {2,3}.
-        let s = "- [ ] pay rent"
-        let box = NSRange(location: 2, length: 3)
-        assert(Markdown.todoBox(in: s, at: 2) == box, "the '[' should hit")
-        assert(Markdown.todoBox(in: s, at: 3) == box, "the middle should hit")
-        assert(Markdown.todoBox(in: s, at: 10) == nil, "a click on the text should miss")
-        assert(Markdown.todoBox(in: "- milk", at: 2) == nil, "a plain bullet has no box")
-    }
 
     static func urlNormalization() {
         // Query and fragment are session noise; a note pinned to a page should survive them.

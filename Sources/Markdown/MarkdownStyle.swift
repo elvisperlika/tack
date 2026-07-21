@@ -48,26 +48,4 @@ enum MarkdownStyle {
         if let heading { a[.tackHeading] = heading }
         return a
     }
-
-    /// Dim the literal `- ` / `[ ]` of bullet and todo lines and strike ticked todos — the one bit
-    /// of styling that isn't attribute-driven, reapplied after each edit. The rich buffer has no
-    /// inline/heading markers, so `spans` here only ever matches bullets and todos.
-    static func styleLists(_ ts: NSTextStorage) {
-        for span in Markdown.spans(in: ts.string) {
-            switch span.style {
-            case .bullet:
-                for m in span.markers { ts.addAttribute(.foregroundColor, value: dim, range: m) }
-            case .todo(let done):
-                for m in span.markers { ts.addAttribute(.foregroundColor, value: dim, range: m) }
-                if done {
-                    ts.addAttribute(
-                        .strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: span.content)
-                    ts.addAttribute(.foregroundColor, value: dim, range: span.content)
-                } else {
-                    ts.removeAttribute(.strikethroughStyle, range: span.content)
-                }
-            default: break  // inline/heading are attribute-driven, not literal markers
-            }
-        }
-    }
 }

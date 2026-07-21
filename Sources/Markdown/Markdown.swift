@@ -14,6 +14,20 @@ import Foundation
 /// String-backed so it can be stored as an attribute value and read back on serialize.
 enum InlineStyle: String { case bold, italic, code, strike }
 
+/// The rendered list markers. A list line's `- ` / `- [ ] ` / `- [x] ` markdown is consumed and
+/// replaced by one of these real glyphs, so the buffer shows a bullet/checkbox, never the markup.
+/// Each is glyph + trailing space — two UTF-16 units — so `width` locates the content after it.
+enum ListGlyph {
+    static let bullet = "\u{2022} "  // "• "
+    static let todoOpen = "\u{2610} "  // "☐ "
+    static let todoDone = "\u{2611} "  // "☑ "
+    static let all = [bullet, todoOpen, todoDone]
+    static let width = 2
+
+    /// The list glyph a line starts with, if any.
+    static func leading(_ line: String) -> String? { all.first { line.hasPrefix($0) } }
+}
+
 enum Markdown {
     enum Style: Equatable {
         case bold, italic, code, strike, bullet
@@ -129,21 +143,5 @@ enum Markdown {
             if hi == caret { return (NSRange(location: lo, length: hi - lo), style) }
         }
         return nil
-    }
-
-    /// The `[ ]` / `[x]` range under `index`, or nil if the click landed anywhere else.
-    static func todoBox(in text: String, at index: Int) -> NSRange? {
-        let ns = text as NSString
-        var hit: NSRange?
-        todo.enumerateMatches(in: text, range: NSRange(location: 0, length: ns.length)) { m, _, stop in
-            guard let m else { return }
-            let mark = m.range(at: 2)  // the char between the brackets
-            let box = NSRange(location: mark.location - 1, length: 3)
-            if NSLocationInRange(index, box) {
-                hit = box
-                stop.pointee = true
-            }
-        }
-        return hit
     }
 }

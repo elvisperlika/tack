@@ -6,19 +6,40 @@ private final class KeyableWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
-/// Clicking a `[ ]` ticks it; every other click is an ordinary click.
+/// Clicking a checkbox glyph ticks it; every other click is an ordinary click.
 private final class MarkdownTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         let i = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
-        guard let box = Markdown.todoBox(in: string, at: i) else {
-            return super.mouseDown(with: event)
+        let ns = string as NSString
+        // A click on the glyph can resolve to either side of it, so check both insertion sides.
+        for cand in [i, i - 1] where cand >= 0 && cand < ns.length {
+            let ch = ns.substring(with: NSRange(location: cand, length: 1))
+            if ch == "\u{2610}" || ch == "\u{2611}" { toggleCheckbox(at: cand); return }
         }
-        let ticked = (string as NSString).substring(with: box) == "[ ]" ? "[x]" : "[ ]"
-        // shouldChangeText/didChangeText registers the undo *and* posts the change notification,
-        // so the textDidChange path re-strikes the todo and saves. No second save path to keep honest.
-        guard shouldChangeText(in: box, replacementString: ticked) else { return }
-        textStorage?.replaceCharacters(in: box, with: ticked)
+        super.mouseDown(with: event)
+    }
+
+    private func toggleCheckbox(at i: Int) {
+        guard let ts = textStorage else { return }
+        let becomingDone = (ts.string as NSString).substring(with: NSRange(location: i, length: 1)) == "\u{2610}"
+        let box = NSRange(location: i, length: 1)
+        // shouldChangeText/didChangeText registers the undo *and* posts the change notification.
+        guard shouldChangeText(in: box, replacementString: becomingDone ? "\u{2611}" : "\u{2610}") else { return }
+        ts.replaceCharacters(in: box, with: becomingDone ? "\u{2611}" : "\u{2610}")
         didChangeText()
+
+        // Strike / un-strike the item's content to match the new state.
+        let ns = ts.string as NSString
+        let line = ns.lineRange(for: NSRange(location: i, length: 0))
+        let contentLen = line.length - ListGlyph.width - (ns.substring(with: line).hasSuffix("\n") ? 1 : 0)
+        guard contentLen > 0 else { return }
+        let range = NSRange(location: line.location + ListGlyph.width, length: contentLen)
+        if becomingDone {
+            MarkdownDocument.strikeThrough(ts, range)
+        } else {
+            ts.removeAttribute(.strikethroughStyle, range: range)
+            ts.addAttribute(.foregroundColor, value: MarkdownStyle.textColor, range: range)
+        }
     }
 
     // ⌘B / ⌘I reach here through the responder chain from the invisible Edit menu (the text view
@@ -32,7 +53,11 @@ private final class MarkdownTextView: NSTextView {
 /// it out first and let the delegate snap it back, which flickered at the edge.
 private final class DragGlassView: NSVisualEffectView {
     var onDrag: ((NSPoint) -> Void)?  // proposed window origin, Cocoa coords
-    private var grab = NSPoint.zero  // mouse-to-origin offset captured at mouseDown
+    // nil unless a drag actually began on the glass. A mouseDragged with no grab is one that
+    // bubbled up the responder chain — e.g. a checkbox click in the text view, whose mouseDown we
+    // handled without consuming the gesture. Acting on it would drag the note with a stale offset,
+    // so it's ignored: the glass only moves the note for drags it started itself.
+    private var grab: NSPoint?
 
     override func mouseDown(with event: NSEvent) {
         guard let origin = window?.frame.origin else { return }
@@ -41,9 +66,12 @@ private final class DragGlassView: NSVisualEffectView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard let grab else { return }
         let mouse = NSEvent.mouseLocation
         onDrag?(NSPoint(x: mouse.x - grab.x, y: mouse.y - grab.y))
     }
+
+    override func mouseUp(with event: NSEvent) { grab = nil }
 }
 
 /// One reusable floating post-it. Follows the tracked window by keeping a fixed offset (dx, dy)
@@ -452,7 +480,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
             reforming = true
             MarkdownInput.autoformat(textView)
             MarkdownInput.headingRule(textView)
-            if let ts = textView.textStorage { MarkdownStyle.styleLists(ts) }
+            MarkdownInput.listRule(textView)
             reforming = false
         }
         scheduleSave()

@@ -1,8 +1,8 @@
 import AppKit
 
 /// The storage boundary. On disk a note is markdown; in the editor it is rich text with no
-/// inline/heading markers. `parse` strips those markers into attributes; `serialize` puts them
-/// back. Bullets and todos keep their literal `- ` / `[ ]` (Phase 1), so they round-trip as text.
+/// markdown markup: inline/heading markers become attributes, and list markers become rendered
+/// `•` / `☐` / `☑` glyphs (`ListGlyph`). `parse` strips markup out, `serialize` puts it back.
 ///
 /// Pure — no window — so `--selftest` asserts `serialize(parse(md)) == md` over a corpus.
 enum MarkdownDocument {
@@ -11,25 +11,34 @@ enum MarkdownDocument {
 
     static func parse(_ markdown: String) -> NSAttributedString {
         let s = NSTextStorage(string: markdown, attributes: MarkdownStyle.base)
-        var deletions: [NSRange] = []  // inline + heading markers, removed after marks are placed
+        // Each markdown marker becomes a replacement: "" removes it (inline/heading), or a list
+        // glyph takes its place. Applied after the semantic marks are set, so content rides along.
+        var edits: [(NSRange, String)] = []
 
         for span in Markdown.spans(in: markdown) {
             switch span.style {
             case .bold, .italic, .code, .strike:
                 s.addAttribute(.tackInline, value: inlineRaw(span.style), range: span.content)
-                deletions.append(contentsOf: span.markers)
+                for m in span.markers { edits.append((m, "")) }
             case .heading(let level):
                 s.addAttribute(.tackHeading, value: level, range: span.content)
-                deletions.append(contentsOf: span.markers)
-            case .bullet, .todo:
-                break  // literal markers; styled by the visual pass below via styleLists
+                for m in span.markers { edits.append((m, "")) }
+            case .bullet:
+                if let m = span.markers.first { edits.append((m, ListGlyph.bullet)) }
+            case .todo(let done):
+                if let m = span.markers.first {
+                    edits.append((m, done ? ListGlyph.todoDone : ListGlyph.todoOpen))
+                }
+                if done { strikeThrough(s, span.content) }
             }
         }
 
-        // Descending, so removing a later marker never shifts an earlier one still to be removed.
-        for r in deletions.sorted(by: { $0.location > $1.location }) { s.deleteCharacters(in: r) }
+        // Descending, so replacing a later marker never shifts an earlier one still to be edited.
+        for (r, rep) in edits.sorted(by: { $0.0.location > $1.0.location }) {
+            s.replaceCharacters(in: r, with: NSAttributedString(string: rep, attributes: MarkdownStyle.base))
+        }
 
-        // Derive appearance from the marks now on the (shortened) string. Collect first: mutating
+        // Derive appearance from the marks now on the (edited) string. Collect first: mutating
         // attributes while enumerating them is asking for trouble.
         var runs: [(NSRange, InlineStyle?, Int?)] = []
         s.enumerateAttributes(in: NSRange(location: 0, length: s.length)) { attrs, range, _ in
@@ -40,10 +49,13 @@ enum MarkdownDocument {
         for (range, inline, heading) in runs {
             s.addAttributes(MarkdownStyle.visual(inline: inline, heading: heading), range: range)
         }
-
-        // Bullets/todos are still literal text: dim their markers, strike ticked ones.
-        MarkdownStyle.styleLists(s)
         return s
+    }
+
+    /// Strike + dim a ticked todo's content. Public so the click-to-toggle can reuse it.
+    static func strikeThrough(_ ts: NSTextStorage, _ range: NSRange) {
+        ts.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+        ts.addAttribute(.foregroundColor, value: MarkdownStyle.dim, range: range)
     }
 
     // MARK: - Attributed -> markdown (save)
@@ -62,15 +74,30 @@ enum MarkdownDocument {
         return out.joined(separator: "\n")
     }
 
+    private static let listMarkdown: [(glyph: String, markdown: String)] = [
+        (ListGlyph.bullet, "- "), (ListGlyph.todoOpen, "- [ ] "), (ListGlyph.todoDone, "- [x] "),
+    ]
+
     private static func serializeLine(_ attr: NSAttributedString, range: NSRange) -> String {
         guard range.length > 0 else { return "" }
-        let prefix = (attr.attribute(.tackHeading, at: range.location, effectiveRange: nil) as? Int)
-            .map { String(repeating: "#", count: $0) + " " } ?? ""
-
-        // Re-wrap inline runs; literal bullet/todo text carries no .tackInline, so it passes through.
-        var body = ""
         let ns = attr.string as NSString
-        attr.enumerateAttribute(.tackInline, in: range) { value, r, _ in
+        let lineText = ns.substring(with: range)
+
+        // A line is a list item, a heading, or body — pick the prefix and the content range.
+        var prefix = ""
+        var content = range
+        if let (glyph, markdown) = listMarkdown.first(where: { lineText.hasPrefix($0.glyph) }) {
+            prefix = markdown
+            _ = glyph
+            content = NSRange(location: range.location + ListGlyph.width, length: range.length - ListGlyph.width)
+        } else if let level = attr.attribute(.tackHeading, at: range.location, effectiveRange: nil) as? Int {
+            prefix = String(repeating: "#", count: level) + " "
+        }
+
+        // Re-wrap inline runs; the list glyph and any plain text carry no .tackInline, so they pass
+        // through — except the glyph, which is excluded from `content` above.
+        var body = ""
+        attr.enumerateAttribute(.tackInline, in: content) { value, r, _ in
             let text = ns.substring(with: r)
             if let raw = value as? String, let style = InlineStyle(rawValue: raw) {
                 body += wrap(text, style)

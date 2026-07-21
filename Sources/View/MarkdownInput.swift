@@ -67,12 +67,45 @@ enum MarkdownInput {
         return true
     }
 
-    /// Command interception for the text view delegate: Enter starts a fresh body line; Backspace
-    /// at a heading's start turns it back into body text. Returns true when handled.
+    /// After an edit: if the caret line is `- `/`* ` (bullet) or `[]`/`[ ]`/`[x]` + space (todo),
+    /// swap the prefix for its rendered glyph. `[]` rather than `- [ ]` is the trigger so it doesn't
+    /// collide with the bullet rule firing first. Returns true if it changed the text.
+    @discardableResult
+    static func listRule(_ tv: NSTextView) -> Bool {
+        guard let ts = tv.textStorage else { return false }
+        let sel = tv.selectedRange()
+        guard sel.length == 0 else { return false }
+        let ns = ts.string as NSString
+        let line = ns.lineRange(for: NSRange(location: sel.location, length: 0))
+        let prefixLen = sel.location - line.location
+        guard (2...4).contains(prefixLen) else { return false }  // "- " .. "[ ] "
+        let prefix = ns.substring(with: NSRange(location: line.location, length: prefixLen))
+
+        let glyph: String
+        if bulletPrefix.firstMatch(in: prefix, range: whole(prefix)) != nil {
+            glyph = ListGlyph.bullet
+        } else if let m = todoPrefix.firstMatch(in: prefix, range: whole(prefix)) {
+            let inner = (prefix as NSString).substring(with: m.range(at: 1)).lowercased()
+            glyph = inner == "x" ? ListGlyph.todoDone : ListGlyph.todoOpen
+        } else {
+            return false
+        }
+
+        let del = NSRange(location: line.location, length: prefixLen)
+        guard tv.shouldChangeText(in: del, replacementString: glyph) else { return false }
+        ts.replaceCharacters(in: del, with: NSAttributedString(string: glyph, attributes: MarkdownStyle.base))
+        tv.didChangeText()
+        tv.setSelectedRange(NSRange(location: line.location + ListGlyph.width, length: 0))
+        tv.typingAttributes = MarkdownStyle.base
+        return true
+    }
+
+    /// Command interception for the text view delegate: Enter continues or exits a list (else starts
+    /// a fresh body line); Backspace at a list/heading start turns it back into body. True if handled.
     static func handle(_ selector: Selector, _ tv: NSTextView) -> Bool {
         switch selector {
-        case Selector(("insertNewline:")): return newline(tv)
-        case Selector(("deleteBackward:")): return backspaceUnheading(tv)
+        case #selector(NSStandardKeyBindingResponding.insertNewline(_:)): return newline(tv)
+        case #selector(NSStandardKeyBindingResponding.deleteBackward(_:)): return backspace(tv)
         default: return false
         }
     }
@@ -102,33 +135,69 @@ enum MarkdownInput {
     // MARK: - helpers
 
     private static let headingPrefix = try! NSRegularExpression(pattern: "^(#{1,3}) $")
+    private static let bulletPrefix = try! NSRegularExpression(pattern: "^([-*]) $")
+    private static let todoPrefix = try! NSRegularExpression(pattern: "^\\[([ xX]?)\\] $")
 
+    private static func whole(_ s: String) -> NSRange { NSRange(location: 0, length: (s as NSString).length) }
+
+    /// Enter inside a list item continues it (empty item exits the list); elsewhere it starts a
+    /// fresh body line. Either way the new line is body — it never inherits a heading.
     private static func newline(_ tv: NSTextView) -> Bool {
         guard let ts = tv.textStorage else { return false }
         let sel = tv.selectedRange()
-        guard tv.shouldChangeText(in: sel, replacementString: "\n") else { return true }
-        ts.replaceCharacters(in: sel, with: NSAttributedString(string: "\n", attributes: MarkdownStyle.base))
-        tv.didChangeText()
-        tv.setSelectedRange(NSRange(location: sel.location + 1, length: 0))
-        tv.typingAttributes = MarkdownStyle.base  // a fresh line is body, never inherits a heading
-        return true
+        let ns = ts.string as NSString
+        let line = ns.lineRange(for: NSRange(location: sel.location, length: 0))
+        let lineText = ns.substring(with: line)
+
+        if let glyph = ListGlyph.leading(lineText) {
+            let contentLen = line.length - ListGlyph.width - (lineText.hasSuffix("\n") ? 1 : 0)
+            if contentLen <= 0 {  // empty item: Enter drops the marker and leaves a body line
+                return replace(tv, NSRange(location: line.location, length: ListGlyph.width), "", caret: line.location)
+            }
+            // Continue the list; a todo continues as an open box, not a copy of a ticked one.
+            let next = (glyph == ListGlyph.bullet) ? ListGlyph.bullet : ListGlyph.todoOpen
+            return replace(tv, sel, "\n" + next, caret: sel.location + ("\n" + next as NSString).length)
+        }
+        return replace(tv, sel, "\n", caret: sel.location + 1)
     }
 
-    private static func backspaceUnheading(_ tv: NSTextView) -> Bool {
+    /// Backspace at a list item's content start drops the marker; at a heading's start it un-headings.
+    /// Anything else falls through to the text view's own deletion.
+    private static func backspace(_ tv: NSTextView) -> Bool {
         guard let ts = tv.textStorage else { return false }
         let sel = tv.selectedRange()
         guard sel.length == 0 else { return false }
         let ns = ts.string as NSString
         let line = ns.lineRange(for: NSRange(location: sel.location, length: 0))
-        guard sel.location == line.location,  // caret at the very start of the line
+        let lineText = ns.substring(with: line)
+
+        if ListGlyph.leading(lineText) != nil, sel.location == line.location + ListGlyph.width {
+            return replace(tv, NSRange(location: line.location, length: ListGlyph.width), "", caret: line.location)
+        }
+        if sel.location == line.location,
             let level = ts.attribute(.tackHeading, at: line.location, effectiveRange: nil) as? Int,
             level > 0
-        else { return false }
-        let contentLen = line.length - (ns.substring(with: line).hasSuffix("\n") ? 1 : 0)
-        let range = NSRange(location: line.location, length: contentLen)
-        guard tv.shouldChangeText(in: range, replacementString: nil) else { return true }
-        ts.setAttributes(MarkdownStyle.base, range: range)
+        {
+            let contentLen = line.length - (lineText.hasSuffix("\n") ? 1 : 0)
+            let range = NSRange(location: line.location, length: contentLen)
+            guard tv.shouldChangeText(in: range, replacementString: nil) else { return true }
+            ts.setAttributes(MarkdownStyle.base, range: range)
+            tv.didChangeText()
+            tv.typingAttributes = MarkdownStyle.base
+            return true
+        }
+        return false
+    }
+
+    /// Replace `range` with base-styled `text`, register undo, put the caret at `caret`, and reset
+    /// typing to body — the shared spine of the Enter/Backspace list edits.
+    @discardableResult
+    private static func replace(_ tv: NSTextView, _ range: NSRange, _ text: String, caret: Int) -> Bool {
+        guard let ts = tv.textStorage else { return false }
+        guard tv.shouldChangeText(in: range, replacementString: text) else { return true }
+        ts.replaceCharacters(in: range, with: NSAttributedString(string: text, attributes: MarkdownStyle.base))
         tv.didChangeText()
+        tv.setSelectedRange(NSRange(location: caret, length: 0))
         tv.typingAttributes = MarkdownStyle.base
         return true
     }
