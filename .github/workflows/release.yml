@@ -55,6 +55,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             "dist/Tack-$GITHUB_REF_NAME-apple-silicon.zip" \
             "dist/Tack-$GITHUB_REF_NAME-intel.zip" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             --notes "**apple-silicon** for M-series Macs, **intel** for Intel Macs. Unzip, then **right-click → Open** on first launch (the build is not notarized)."
