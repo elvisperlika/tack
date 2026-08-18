@@ -1,4 +1,8 @@
-# 📌 Taaaaaaaaaaaaack
+<p align="center">
+  <img src="public/banner.png" alt="Tack icon" width="600">
+</p>
+
+---
 
 Sticky notes that stick to windows, not your desktop.
 

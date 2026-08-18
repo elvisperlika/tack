@@ -23,7 +23,7 @@ cp Info.plist "$APP/Contents/Info.plist"
 # `sips -c` grows the canvas with transparent padding; -z then downscales per slot.
 ICONSET="$(mktemp -d)"
 mkdir -p "$ICONSET/AppIcon.iconset"
-sips -Z 824 icon.png --out "$ICONSET/icon1024.png" >/dev/null
+sips -Z 824 public/icon.png --out "$ICONSET/icon1024.png" >/dev/null
 sips -c 1024 1024 "$ICONSET/icon1024.png" >/dev/null
 for s in 16 32 128 256 512; do
   sips -z "$s" "$s" "$ICONSET/icon1024.png" --out "$ICONSET/AppIcon.iconset/icon_${s}x${s}.png" >/dev/null
