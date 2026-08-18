@@ -2,13 +2,19 @@ import AppKit
 
 /// Owns the app's lifecycle and the two loops that decide which note is on screen
 /// and where. Menu construction lives in AppMenus.swift.
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     let note = NoteWindow()
     private var statusItem: NSStatusItem?
-    /// Picks the colour new notes start with. Retained here because it's the target of its own
-    /// swatch buttons and colour panel; its submenu is rebuilt on each menu open (`menuNeedsUpdate`).
-    lazy var defaultColorMenu = PaletteMenu { NotePreferences.shared.defaultColorHex = Swatch.hex(from: $0) }
-    var defaultColorItem: NSMenuItem?
+    /// The Tack window, built lazily on first open. Empty placeholder for now.
+    lazy var mainWindow: NSWindow = {
+        let w = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 480),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        w.setFrameAutosaveName("tackMain")
+        w.center()
+        w.isReleasedWhenClosed = false
+        return w
+    }()
     private var pollTimer: Timer?  // slow: which surface is focused (~0.4s)
     private var trackLink: CADisplayLink? {  // vsync glue: the shown note follows its window
         didSet { oldValue?.invalidate() }  // an outlived link would keep firing

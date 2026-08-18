@@ -1,8 +1,8 @@
 import AppKit
 
-/// Everything the app puts in a menu: the status-bar menu, its Default color
-/// submenu, and the invisible Edit menu. No tracking state lives here — the
-/// stored properties it touches stay on `AppDelegate`.
+/// Everything the app puts in a menu: the status-bar menu and the invisible
+/// Edit menu. No tracking state lives here — the stored properties it touches
+/// stay on `AppDelegate`.
 extension AppDelegate {
 
     /// The status-bar item. Retained by the caller; the bar only keeps a weak hold.
@@ -12,25 +12,22 @@ extension AppDelegate {
 
         let menu = NSMenu()
         menu.addItem(
-            NSMenuItem(title: "Add note here", action: #selector(addNote), keyEquivalent: ""))
+            makeItem("Add note here", #selector(addNote), symbol: "note.text", key: ""))
         menu.addItem(.separator())
-        let defColor = NSMenuItem(title: "Default color", action: nil, keyEquivalent: "")
-        menu.addItem(defColor)
-        defaultColorItem = defColor
+        menu.addItem(makeItem("Open Tack", #selector(openTack), symbol: "macwindow", key: ""))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Tack", action: #selector(quit), keyEquivalent: "q"))
+        menu.addItem(makeItem("Quit Tack", #selector(quit), symbol: "power", key: "q"))
         menu.items.forEach { $0.target = self }
-        menu.delegate = self  // rebuilds the Default color submenu on open
         item.menu = menu
         return item
     }
 
-    /// Rebuild the Default color submenu on open so it shows the current pick and any palette edits.
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        guard let item = defaultColorItem else { return }
-        let hex = NotePreferences.shared.defaultColorHex
-        item.image = Swatch.image(hex: hex)
-        item.submenu = defaultColorMenu.menu(currentHex: hex)
+    private func makeItem(_ title: String, _ action: Selector, symbol: String, key: String) -> NSMenuItem {
+        let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        img?.isTemplate = true  // menus recolour template images to match highlight/light-dark
+        i.image = img
+        return i
     }
 
     /// ⌘C/⌘V/⌘Z only reach a text view through the main menu's key equivalents. An agent app has
@@ -67,6 +64,12 @@ extension AppDelegate {
             level: hit?.level ?? container.finestLevel)  // finest available, promote later
         NSApp.activate(ignoringOtherApps: true)
         note.focusForEditing()
+    }
+
+    /// Opens the Tack window — empty for now, the future home of note management.
+    @objc func openTack() {
+        mainWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc func quit() { NSApp.terminate(nil) }
