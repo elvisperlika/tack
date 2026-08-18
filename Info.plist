@@ -9,6 +9,7 @@
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleExecutable</key><string>Tack</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
     <key>NSAppleEventsUsageDescription</key><string>Tack watches which folder is open in Finder and which tab is active in Terminal, to show the right note.</string>

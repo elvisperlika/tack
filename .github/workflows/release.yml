@@ -1,19 +1,82 @@
-# Push a tag like v1.2 and a GitHub Release appears with Tack.app attached,
+# Push to main → the next semver tag is derived from the conventional commits since
+# the last tag, pushed, and a GitHub Release appears with Tack.app attached,
 # one zip per architecture (Apple Silicon and Intel).
+# One workflow on purpose: a tag pushed with GITHUB_TOKEN does not trigger other
+# workflows, so the build has to hang off the same run that created the tag.
 # Ad-hoc signed (no identity in CI): downloaders right-click → Open the first time.
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine and push next version tag
+        id: bump
+        run: |
+          set -euo pipefail
+
+          LAST_TAG=$(git tag --list 'v*' --sort=-v:refname | head -1)
+
+          # No previous tag → start at v0.1.0
+          if [ -z "$LAST_TAG" ]; then
+            TAG=v0.1.0
+          else
+            # HEAD already tagged → nothing to do (empty output skips the build jobs)
+            if [ "$(git rev-list -n 1 "$LAST_TAG" 2>/dev/null)" = "$(git rev-parse HEAD)" ]; then
+              echo "HEAD already tagged at $LAST_TAG — nothing to do"
+              exit 0
+            fi
+
+            COMMITS=$(git log "${LAST_TAG}..HEAD" --format="%s%n%b")
+
+            # Bump logic: breaking > feat > patch
+            MAJOR=0; MINOR=0
+            if echo "$COMMITS" | grep -qsE "BREAKING[ -]CHANGE"; then
+              MAJOR=1
+            elif echo "$COMMITS" | grep -qsE '^[a-z]+(\(.+\))?!:'; then
+              MAJOR=1
+            elif echo "$COMMITS" | grep -qsE '^feat(\(.+\))?:'; then
+              MINOR=1
+            fi
+
+            IFS=. read -r MAJOR_V MINOR_V PATCH_V <<< "${LAST_TAG#v}"
+            : "${PATCH_V:=0}"
+
+            if [ "$MAJOR" -eq 1 ]; then
+              TAG="v$((MAJOR_V + 1)).0.0"
+            elif [ "$MINOR" -eq 1 ]; then
+              TAG="v${MAJOR_V}.$((MINOR_V + 1)).0"
+            else
+              TAG="v${MAJOR_V}.${MINOR_V}.$((PATCH_V + 1))"
+            fi
+          fi
+
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag "$TAG" -m "$TAG"
+          git push origin "$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Pushed tag $TAG"
+
   # One runner per arch: Apple Silicon builds native on macos-latest; Intel is pinned to macos-15
   # so the x86_64 cross-build stays on a known-good runner as GitHub promotes newer images.
   build:
+    needs: tag
+    if: needs.tag.outputs.tag != ''
     strategy:
       matrix:
         include:
@@ -26,12 +89,14 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.tag }}
 
       # bundle.sh rebuilds Tack.app from scratch; ditto keeps the bundle's structure/metadata intact.
       - name: Build Tack.app (${{ matrix.label }})
         run: |
           BUILD_FLAGS="--arch ${{ matrix.arch }}" SIGN_ID=- ./bundle.sh
-          ditto -c -k --keepParent Tack.app "Tack-$GITHUB_REF_NAME-${{ matrix.label }}.zip"
+          ditto -c -k --keepParent Tack.app "Tack-${{ needs.tag.outputs.tag }}-${{ matrix.label }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -40,7 +105,7 @@ jobs:
 
   # Both zips in hand, cut the release once (a Linux runner is enough — no macOS work here).
   release:
-    needs: build
+    needs: [tag, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -51,11 +116,12 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.tag.outputs.tag }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            "dist/Tack-$GITHUB_REF_NAME-apple-silicon.zip" \
-            "dist/Tack-$GITHUB_REF_NAME-intel.zip" \
+          gh release create "$TAG" \
+            "dist/Tack-$TAG-apple-silicon.zip" \
+            "dist/Tack-$TAG-intel.zip" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" \
+            --title "$TAG" \
             --generate-notes \
             --notes "**apple-silicon** for M-series Macs, **intel** for Intel Macs. Unzip, then **right-click → Open** on first launch (the build is not notarized)."

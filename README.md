@@ -1,11 +1,13 @@
-# 📌 Taaaaaaaaaaaaack
+<p align="center">
+  <img src="public/banner.png" alt="Tack icon" width="600">
+</p>
+
+---
 
 Sticky notes that stick to windows, not your desktop.
 
 <p align="center">
-  <img src="images/example1.gif" alt="Tack in finder" width="800">
-  <img src="images/example2.gif" alt="Tack in finder" width="800">
-  <img src="images/example3.gif" alt="Tack in finder" width="800">
+  <img src="images/example.gif" alt="Tack in finder" width="800">
 </p>
 
 Tack is a tiny macOS menu-bar app. Pin a note to a Finder folder or to any app window — the note follows the window as it moves, stays inside its bounds, and reappears when you come back to that window.

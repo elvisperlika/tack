@@ -1,52 +1,29 @@
 import AppKit
 
-@main
-enum Main {
-    static func main() {
-        if CommandLine.arguments.contains("--selftest") {
-            SelfTest.run()
-            return
-        }
-        let app = NSApplication.shared
-        let delegate = AppDelegate()
-        app.delegate = delegate
-        app.setActivationPolicy(.accessory)  // menu-bar agent, no dock icon
-        app.run()
-    }
-}
-
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private let note = NoteWindow()
+/// Owns the app's lifecycle and the two loops that decide which note is on screen
+/// and where. Menu construction lives in AppMenus.swift.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let note = NoteWindow()
     private var statusItem: NSStatusItem?
-    /// Picks the colour new notes start with. Retained here because it's the target of its own
-    /// swatch buttons and colour panel; its submenu is rebuilt on each menu open (`menuNeedsUpdate`).
-    private lazy var defaultColorMenu = PaletteMenu { NotePreferences.shared.defaultColorHex = Swatch.hex(from: $0) }
-    private var defaultColorItem: NSMenuItem?
+    /// The Tack window, built lazily on first open. Empty placeholder for now.
+    lazy var mainWindow: NSWindow = {
+        let w = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 480),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        w.setFrameAutosaveName("tackMain")
+        w.center()
+        w.isReleasedWhenClosed = false
+        return w
+    }()
     private var pollTimer: Timer?  // slow: which surface is focused (~0.4s)
     private var trackLink: CADisplayLink? {  // vsync glue: the shown note follows its window
         didSet { oldValue?.invalidate() }  // an outlived link would keep firing
     }
 
-    private var current: Container?
+    var current: Container?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "📌"
-        statusItem = item  // retained here; the bar only keeps a weak hold
-
-        let menu = NSMenu()
-        menu.addItem(
-            NSMenuItem(title: "Add note here", action: #selector(addNote), keyEquivalent: ""))
-        menu.addItem(.separator())
-        let defColor = NSMenuItem(title: "Default color", action: nil, keyEquivalent: "")
-        menu.addItem(defColor)
-        defaultColorItem = defColor
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Tack", action: #selector(quit), keyEquivalent: "q"))
-        menu.items.forEach { $0.target = self }
-        menu.delegate = self  // rebuilds the Default color submenu on open
-        item.menu = menu
-
+        statusItem = makeStatusItem()
         installEditMenu()
         note.onDelete = { [weak self] in self?.stopTracking() }
         AXWindows.promptForPermission()  // needed to bind notes to non-Finder app windows
@@ -56,44 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Rebuild the Default color submenu on open so it shows the current pick and any palette edits.
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        guard let item = defaultColorItem else { return }
-        let hex = NotePreferences.shared.defaultColorHex
-        item.image = Swatch.image(hex: hex)
-        item.submenu = defaultColorMenu.menu(currentHex: hex)
-    }
-
-    /// ⌘C/⌘V/⌘Z only reach a text view through the main menu's key equivalents. An agent app has
-    /// no menu bar to show a menu in, but NSApp still dispatches through `mainMenu` — so this
-    /// invisible Edit menu is the whole reason copy, paste and undo work inside a note.
-    private func installEditMenu() {
-        let edit = NSMenu()
-        let items: [(String, Selector, String)] = [
-            ("Undo", Selector(("undo:")), "z"),
-            ("Redo", Selector(("redo:")), "Z"),  // capital Z is ⌘⇧Z
-            ("Cut", #selector(NSText.cut(_:)), "x"),
-            ("Copy", #selector(NSText.copy(_:)), "c"),
-            ("Paste", #selector(NSText.paste(_:)), "v"),
-            ("Select All", #selector(NSText.selectAll(_:)), "a"),
-            ("Bold", Selector(("toggleBold:")), "b"),  // MarkdownTextView implements these
-            ("Italic", Selector(("toggleItalic:")), "i"),
-        ]
-        // Target stays nil on purpose: each one walks the responder chain to whatever text view
-        // is focused, which is exactly the note being edited.
-        items.forEach { edit.addItem(NSMenuItem(title: $0, action: $1, keyEquivalent: $2)) }
-        let editItem = NSMenuItem()
-        editItem.submenu = edit
-        let main = NSMenu()
-        main.addItem(editItem)
-        NSApp.mainMenu = main
-    }
-
     // MARK: - Target resolution
 
     /// The surface the user is focused on right now (or `current` while we're editing our own
     /// note, which would otherwise resolve to Tack itself).
-    private func resolve() -> Container? {
+    func resolve() -> Container? {
         guard let front = NSWorkspace.shared.frontmostApplication else { return current }
         if front.bundleIdentifier == Bundle.main.bundleIdentifier { return current }
         return Container.resolve(front: front)
@@ -155,7 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Show / hide
 
-    private func showNote(_ n: Note, frame f: Frame, container: Container, level: Int) {
+    func showNote(_ n: Note, frame f: Frame, container: Container, level: Int) {
         let box = LevelBox(level)  // this note's own level cell — see LevelBox
         note.show(note: n, bounds: f.bounds) { edited in container.write(edited, at: box.value) }
         let choices = (container.minLevel...container.finestLevel).map {
@@ -178,19 +122,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func stopTracking() {
         trackLink = nil  // didSet invalidates it on the way out
     }
-
-    // MARK: - Menu
-
-    @objc private func addNote() {
-        guard let container = resolve(), let f = container.frame() else { return }
-        current = container
-        let hit = container.load()
-        showNote(
-            hit?.note ?? Note(text: "", dx: 20, dy: 40), frame: f, container: container,
-            level: hit?.level ?? container.finestLevel)  // finest available, promote later
-        NSApp.activate(ignoringOtherApps: true)
-        note.focusForEditing()
-    }
-
-    @objc private func quit() { NSApp.terminate(nil) }
 }
