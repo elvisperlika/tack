@@ -253,6 +253,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     }
 
     @objc private func levelChosen(_ sender: NSMenuItem) {
+        saver.flush()  // move the latest edit, not the last version already on disk
         pinCurrent = sender.tag
         onPickLevel(sender.tag)
     }
@@ -279,6 +280,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     // MARK: - Show / hide
 
     @objc private func deleteTapped() {
+        saver.cancel()  // a stale delayed save must not recreate the deleted note
         saveHandler(Note(text: "", dx: dx, dy: dy, color: colorHex))  // empty text removes the note
         active = false
         applyVisibility()
@@ -287,6 +289,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
 
     /// Show `note`, positioned relative to the tracked window's top-left; `save` persists edits.
     func show(note: Note, bounds: CGRect, save: @escaping (Note) -> Void) {
+        saver.flush()  // finish the outgoing note before replacing its state and save handler
         self.saveHandler = save
         self.dx = note.dx
         self.dy = note.dy
@@ -334,6 +337,9 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         active = false
         applyVisibility()
     }
+
+    /// The process may terminate before the debounce delay expires.
+    func flushPendingSave() { saver.flush() }
 
     func focusForEditing() {
         window.makeKeyAndOrderFront(nil)

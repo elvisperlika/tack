@@ -129,6 +129,17 @@ enum SelfTest {
         // Spinning the main run loop drains the main dispatch queue in a CLI process.
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         assert(hits == [2], "only the last scheduled block should fire: \(hits)")
+
+        d.call { hits.append(3) }
+        d.flush()
+        assert(hits == [2, 3], "flush should run the pending block immediately: \(hits)")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        assert(hits == [2, 3], "a flushed block must not run again: \(hits)")
+
+        d.call { hits.append(4) }
+        d.cancel()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        assert(hits == [2, 3], "cancel should drop the pending block: \(hits)")
     }
 
     static func coordFlip() {

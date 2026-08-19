@@ -33,6 +33,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        note.flushPendingSave()
+    }
+
     // MARK: - Target resolution
 
     /// The surface the user is focused on right now (or `current` while we're editing our own
