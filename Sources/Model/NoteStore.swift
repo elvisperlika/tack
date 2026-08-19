@@ -45,6 +45,15 @@ enum AppNotes {
 
     static func load(key: String) -> Note? { all()[key] }
 
+    /// Load a stable key, migrating the old title-dependent key on first access.
+    static func load(key: String, migrating legacyKey: String) -> Note? {
+        if let note = load(key: key) { return note }
+        guard legacyKey != key, let note = load(key: legacyKey) else { return nil }
+        save(key: key, note: note)
+        save(key: legacyKey, note: Note(text: "", dx: note.dx, dy: note.dy))
+        return note
+    }
+
     static func save(key: String, note: Note) {
         var dict = all()
         dict[key] = note.isDeletion ? nil : note

@@ -24,6 +24,10 @@ class Container {
 
     var finestLevel: Int { path.count - 1 }
 
+    /// A stable persistence identity for the finest scope when its display hierarchy contains
+    /// mutable components. Browser and Terminal tabs provide this; ordinary containers do not.
+    var finestKey: String? { nil }
+
     /// The note key for a prefix of `path`. Pure, and the format is a compatibility
     /// guarantee: at the finest level of a 2-part path it reproduces the pre-Container
     /// key exactly, so existing appnotes.json files keep resolving.
@@ -31,7 +35,13 @@ class Container {
         path.prefix(level + 1).joined(separator: "|")
     }
 
-    func key(at level: Int) -> String { Self.key(path: path, level: level) }
+    func key(at level: Int) -> String {
+        if level == finestLevel, let finestKey { return finestKey }
+        return Self.key(path: path, level: level)
+    }
+
+    /// What the polling loop compares to decide whether the focused surface actually changed.
+    var focusKey: String { key(at: finestLevel) }
 
     // MARK: - Storage (subclass supplies)
 
@@ -115,7 +125,13 @@ class GenericAppContainer: Container {
 
     override var path: [String] { [bundleID, ident] }
 
-    override func note(at level: Int) -> Note? { AppNotes.load(key: key(at: level)) }
+    override func note(at level: Int) -> Note? {
+        let currentKey = key(at: level)
+        // Before stable tab keys, the mutable title was part of the key. Migrate on first read;
+        // writing the new key before deleting the old one makes an interrupted migration harmless.
+        let legacyKey = Container.key(path: path, level: level)
+        return AppNotes.load(key: currentKey, migrating: legacyKey)
+    }
     override func write(_ note: Note, at level: Int) {
         AppNotes.save(key: key(at: level), note: note)
     }
@@ -157,6 +173,11 @@ final class BrowserContainer: GenericAppContainer {
     override var path: [String] {
         guard let url, !url.isEmpty else { return [bundleID, ident] }  // no URL → window level
         return [bundleID, ident, url]
+    }
+
+    override var finestKey: String? {
+        guard let url, !url.isEmpty else { return nil }
+        return Container.key(path: [bundleID, url], level: 1)
     }
 
     /// scheme + host + path. Query and fragment are session noise.
@@ -204,6 +225,11 @@ final class TerminalContainer: GenericAppContainer {
     override var path: [String] {
         guard let tty else { return [bundleID, ident] }  // no tty → window level
         return [bundleID, ident, tty]
+    }
+
+    override var finestKey: String? {
+        guard let tty else { return nil }
+        return Container.key(path: [bundleID, tty], level: 1)
     }
 }
 

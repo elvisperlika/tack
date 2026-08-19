@@ -6,6 +6,7 @@ enum SelfTest {
     static func run() {
         noteStoreRoundTrip()
         appNotesRoundTrip()
+        stableKeyMigration()
         coordFlip()
         fitToWindow()
         clampToWindow()
@@ -35,6 +36,19 @@ enum SelfTest {
 
         AppNotes.save(key: key, note: Note(text: "", dx: 12, dy: 34))
         assert(AppNotes.load(key: key) == nil, "empty text should delete the app note")
+    }
+
+    static func stableKeyMigration() {
+        let id = UUID().uuidString
+        let legacy = "selftest|old-title|\(id)"
+        let stable = "selftest|\(id)"
+        let n = Note(text: "migrate me", dx: 12, dy: 34)
+        AppNotes.save(key: legacy, note: n)
+        defer { AppNotes.save(key: stable, note: Note(text: "", dx: 0, dy: 0)) }
+
+        assert(AppNotes.load(key: stable, migrating: legacy) == n, "legacy note should migrate")
+        assert(AppNotes.load(key: stable) == n, "migrated note should use the stable key")
+        assert(AppNotes.load(key: legacy) == nil, "legacy title-dependent key should be removed")
     }
 
     static func notePreferencesPalette() {
@@ -164,10 +178,15 @@ enum SelfTest {
 final class FakeContainer: Container {
     private var storage: [String: Note] = [:]
     private let ident: [String]
+    private let stableFinestKey: String?
 
-    init(path: [String]) { self.ident = path }
+    init(path: [String], finestKey: String? = nil) {
+        self.ident = path
+        self.stableFinestKey = finestKey
+    }
 
     override var path: [String] { ident }
+    override var finestKey: String? { stableFinestKey }
     override func note(at level: Int) -> Note? { storage[key(at: level)] }
     override func write(_ note: Note, at level: Int) {
         storage[key(at: level)] = note.isDeletion ? nil : note
@@ -185,6 +204,14 @@ extension SelfTest {
 
         assert(Container.key(path: ["a", "b", "c"], level: 1) == "a|b", "should join a prefix only")
         assert(Container.key(path: ["a", "b", "c"], level: 2) == "a|b|c", "finest should join all")
+
+        let stable = FakeContainer(path: ["app", "old title", "tab-id"], finestKey: "app|tab-id")
+        assert(stable.key(at: 0) == "app", "stable tab key must not change coarser levels")
+        assert(stable.key(at: 1) == "app|old title", "window level should retain its own identity")
+        assert(stable.key(at: 2) == "app|tab-id", "tab key must exclude the mutable title")
+        assert(stable.focusKey == "app|tab-id", "focus identity should use the stable tab key")
+        let renamed = FakeContainer(path: ["app", "new title", "tab-id"], finestKey: "app|tab-id")
+        assert(renamed.focusKey == stable.focusKey, "a title change must not change tab identity")
     }
 
     static func containerLoadFallback() {

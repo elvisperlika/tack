@@ -55,9 +55,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             current = nil
             return
         }
-        // Container is a class, so identity is the path, not the object. This guard comes first:
+        // Container is a class, so compare its stable focus key rather than object identity.
+        // Browser titles and Terminal titles may change without the actual tab changing.
         // an unchanged surface must cost nothing per poll, and must never hide a showing note.
-        guard container.path != current?.path else { return }
+        guard container.focusKey != current?.focusKey else { return }
         // Don't latch a surface we can't place the note on — leaving `current` nil means the
         // next poll retries, rather than stranding the note hidden until the user focuses away.
         guard let f = container.frame() else {
