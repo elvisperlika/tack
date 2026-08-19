@@ -13,6 +13,7 @@ enum SelfTest {
         coordFlip()
         fitToWindow()
         clampToWindow()
+        containResize()
         colorHexRoundTrip()
         containerKeys()
         containerLoadFallback()
@@ -29,6 +30,7 @@ enum SelfTest {
         noteSizeIsOptional()
         urlNormalization()
         notePreferencesPalette()
+        paletteCycles()
         print("✅ all self-tests passed")
     }
 
@@ -87,6 +89,29 @@ enum SelfTest {
         let last = only[0]
         prefs.removeColor(last)
         assert(prefs.palette == [last], "palette must keep at least one colour")
+    }
+
+    static func paletteCycles() {
+        let p = ["FFEB73", "FFB3BA", "AEC6FF"]
+        assert(Swatch.next(after: "FFEB73", in: p) == "FFB3BA", "cycle should advance")
+        assert(Swatch.next(after: "AEC6FF", in: p) == "FFEB73", "cycle should wrap")
+        assert(Swatch.next(after: "123456", in: p) == "FFEB73", "a colour off the palette restarts")
+        assert(Swatch.next(after: "123456", in: []) == "123456", "an empty palette keeps the colour")
+    }
+
+    static func containResize() {
+        let window = CGSize(width: 500, height: 400)
+        // Right edge pushed past the border: cut there, left edge (dx) stays put.
+        let right = Coord.contain(dx: 100, dy: 10, note: CGSize(width: 480, height: 50), window: window)
+        assert(right.dx == 100 && right.size.width == 400, "right edge should stop at the border")
+        // Top edge pushed above it: cut there, the bottom edge keeps its place (dy + height).
+        let top = Coord.contain(dx: 10, dy: -30, note: CGSize(width: 50, height: 120), window: window)
+        assert(top.dy == 0 && top.size.height == 90, "top edge should stop at the border")
+        // Inside the window: untouched.
+        let inside = Coord.contain(dx: 10, dy: 10, note: CGSize(width: 50, height: 60), window: window)
+        assert(
+            inside.dx == 10 && inside.dy == 10 && inside.size == CGSize(width: 50, height: 60),
+            "a resize that fits should be left alone")
     }
 
     static func colorHexRoundTrip() {

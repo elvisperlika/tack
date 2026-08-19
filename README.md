@@ -55,15 +55,16 @@ On first launch, macOS asks for permission to control Finder (and later Terminal
 
 1. Focus a Finder folder or any app window.
 2. Click 📌 → **Add note here**.
-3. Type. Drag the note where you want it — it stays glued to that window, and it can't leave it: dragging toward an edge stops the note at the border. Drag any edge to resize it; the size is saved with the note, and it's capped to the window — shrink the window below the note and the note shrinks to fit rather than spilling over, then grows back when the window does.
+3. Type. Drag the note where you want it — it stays glued to that window, and it can't leave it: dragging toward an edge stops the note at the border. Drag any edge to resize it; that edge stops at the window's border too, so growing the note into the border cuts it there instead of pushing the opposite edge out. The size is saved with the note and capped to the window — shrink the window below the note and the note shrinks to fit rather than spilling over, then grows back when the window does.
 
 Notes edit like Notion. Type `**bold**`, `*italic*`, `` `code` ``, `~~strike~~` or a `#`/`##`/`###` heading and the markup is consumed — you see the formatting, not the symbols, even while editing. ⌘B/⌘I toggle emphasis; backspace at the start of a heading turns it back into body text. Lists work the same way: `- ` becomes a bullet (•) and `[]`/`[x]` a checkbox (☐/☑) — click to tick, Enter continues the list, and Enter on an empty item or backspace at its start leaves the list. On disk a note is plain markdown (`- `, `- [ ]`, `- [x]`), so nothing about the file format changed and older notes just work.
 
-Everything else is behind the note's single ⊙ button, top-right:
+Two dots sit in the note's top-right corner. The first wears the note's own colour: click it and the note takes the next colour in the palette, click again to keep going — no menu, no picker. The red one, in the corner, deletes the note (a note with text asks first; emptying its text still removes it too).
 
-- **Color** — a swatch grid. The palette starts with four (yellow, pink, blue, white) and grows via "+"; a tiny × on each swatch's corner removes it (the last colour can't be removed).
+The rest is a right-click on the card:
+
+- **Color** — the swatch grid, which is where the cycle's colours come from. The palette starts with four (yellow, pink, blue, white) and grows via "+"; a tiny × on each swatch's corner removes it (the last colour can't be removed).
 - **Pin** — how widely the note shows: **this window / this app**, and **this tab** in Chrome/Safari/Arc and Terminal. The entry only appears when there's a choice to make — Finder notes have no levels (they live in the folder itself).
-- **Delete Note** — or just empty the note's text; both remove it.
 
 ## Development
 
@@ -98,7 +99,7 @@ Where this works well, and where it degrades, follows from those sources:
 - **Fuzzy:** everything else is keyed by window title. Two windows with the same title share one note, and a title that changes — unsaved-marker asterisks, notification counters, "3 of 10 files" — takes its note with it.
 - **Not covered:** browsers not on the URL list (Firefox, ...) degrade to title keying — and since a browser's window title follows the active tab, the note *seems* tab-bound until the page title changes out from under it. Adding a Chromium/WebKit browser is one bundle ID in `BrowserContainer.bundleIDs`, as long as it exposes its web area over Accessibility. Apps with a broken or empty accessibility tree (some Electron apps) may expose nothing to key on and can't hold a note at all.
 
-Pinning a note to the window or app level — the pushpin in the note's corner — sidesteps a fuzzy tab identity. And if a note refuses to stick where you expect, `defaults write com.tack.app debugPaths -bool YES` makes Tack log the identity it sees (watch with `log stream --predicate 'process == "Tack"'`).
+Pinning a note to the window or app level — **Pin** in the note's right-click menu — sidesteps a fuzzy tab identity. And if a note refuses to stick where you expect, `defaults write com.tack.app debugPaths -bool YES` makes Tack log the identity it sees (watch with `log stream --predicate 'process == "Tack"'`).
 
 The note itself is a borderless `NSWindow` floating above everything else — a frosted-glass card (`NSVisualEffectView` blurring whatever sits behind it) with the palette colour laid over as a sheer tint. Its position is stored as an offset from the tracked window's top-left corner, clamped *before* every move — Tack drives the drag itself rather than letting AppKit move the window and pulling it back after, so the note stops dead at the window's border instead of escaping and snapping back — and its size is capped to the window too, so a note pinned to a small window shrinks to fit instead of spilling over, and grows back toward its saved size when the window does. The coordinate math (AppleScript measures from the screen's top-left, Cocoa from the bottom-left) lives in pure functions, which is what `--selftest` asserts on without launching any UI.
 

@@ -53,6 +53,7 @@ private final class MarkdownTextView: NSTextView {
 /// it out first and let the delegate snap it back, which flickered at the edge.
 private final class DragGlassView: NSVisualEffectView {
     var onDrag: ((NSPoint) -> Void)?  // proposed window origin, Cocoa coords
+    var contextMenu: (() -> NSMenu?)?  // right-click on the card: palette editing and pin level
     // nil unless a drag actually began on the glass. A mouseDragged with no grab is one that
     // bubbled up the responder chain — e.g. a checkbox click in the text view, whose mouseDown we
     // handled without consuming the gesture. Acting on it would drag the note with a stale offset,
@@ -72,6 +73,8 @@ private final class DragGlassView: NSVisualEffectView {
     }
 
     override func mouseUp(with event: NSEvent) { grab = nil }
+
+    override func menu(for event: NSEvent) -> NSMenu? { contextMenu?() }
 }
 
 /// One reusable floating post-it. Follows the tracked window by keeping a fixed offset (dx, dy)
@@ -80,7 +83,8 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private let window: KeyableWindow
     private let tintView: NSView  // the palette colour, sheer, over the glass
     private let textView: NSTextView
-    private let menuButton: NSButton  // the note's only button: colour, pin level, delete
+    private let colorDot: NSButton  // wears the note's colour; each click takes the next one
+    private let deleteDot: NSButton  // red: deletes the note
     private var reforming = false  // guards the input rules' own edits from re-entering textDidChange
     private lazy var paletteMenu = PaletteMenu { [weak self] in self?.apply(color: $0) }
 
@@ -124,6 +128,19 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
         image.resizingMode = .stretch
         return image
+    }
+
+    private static let dotSize: CGFloat = 13
+    private static let deleteHex = "FF5F57"  // the red of a window's close button
+
+    private static func dotButton(x: CGFloat, y: CGFloat, name: String) -> NSButton {
+        let b = NSButton(frame: NSRect(x: x, y: y, width: dotSize, height: dotSize))
+        b.isBordered = false
+        b.imagePosition = .imageOnly
+        b.setAccessibilityLabel(name)
+        b.toolTip = name
+        b.autoresizingMask = [.minYMargin, .minXMargin]  // stays top-right on resize
+        return b
     }
 
     override init() {
@@ -187,23 +204,26 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         scroll.documentView = textView
         glass.addSubview(scroll)
 
-        // The note's one button, top-right: pops the menu with colour, pin level and delete.
-        menuButton = NSButton(frame: NSRect(x: w - 26, y: h - 24, width: 20, height: 20))
-        menuButton.isBordered = false
-        menuButton.imagePosition = .imageOnly
-        menuButton.image = NSImage(
-            systemSymbolName: "ellipsis.circle.fill", accessibilityDescription: "Note menu")
-        menuButton.contentTintColor = NSColor.black.withAlphaComponent(0.35)
-        menuButton.autoresizingMask = [.minYMargin, .minXMargin]  // stays top-right on resize
-        glass.addSubview(menuButton)
+        // Two dots, top-right: the first wears the note's colour and steps through the palette on
+        // each click, the red one at the corner deletes the note. The rarer choices (editing the palette, the pin level) are a
+        // right-click on the card — one click has to be the whole gesture for the common ones.
+        let dot = Self.dotSize
+        colorDot = Self.dotButton(x: w - 8 - dot * 2 - 6, y: h - 8 - dot, name: "Next colour")
+        glass.addSubview(colorDot)
+        deleteDot = Self.dotButton(x: w - 8 - dot, y: h - 8 - dot, name: "Delete note")
+        deleteDot.image = Swatch.image(hex: Self.deleteHex, size: dot, radius: dot / 2)
+        glass.addSubview(deleteDot)
 
         window.contentView = glass
         super.init()
         glass.onDrag = { [weak self] origin in self?.dragTo(origin: origin) }
+        glass.contextMenu = { [weak self] in self?.buildMenu() }
         window.delegate = self
         textView.delegate = self
-        menuButton.target = self
-        menuButton.action = #selector(openMenu)
+        colorDot.target = self
+        colorDot.action = #selector(cycleColor)
+        deleteDot.target = self
+        deleteDot.action = #selector(deleteTapped)
         applyTint(Swatch.color(fromHex: colorHex))  // one source of truth for the default yellow
         window.invalidateShadow()
     }
@@ -222,9 +242,9 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         onPickLevel = onPick
     }
 
-    /// Everything the note can do, behind the one button: colour, pin level, delete.
-    /// Rebuilt per open so the palette and pin state are always current.
-    @objc private func openMenu() {
+    /// What the dots don't cover, on right-click: the palette itself (add / remove a colour) and
+    /// the pin level. Rebuilt per open so both are always current.
+    private func buildMenu() -> NSMenu {
         let menu = NSMenu()
         let color = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
         color.image = Swatch.image(hex: colorHex)
@@ -245,14 +265,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
             pin.submenu = sub
             menu.addItem(pin)
         }
-        menu.addItem(.separator())
-        let delete = NSMenuItem(
-            title: "Delete Note", action: #selector(deleteTapped), keyEquivalent: "")
-        delete.target = self
-        delete.image = NSImage(systemSymbolName: "trash.fill", accessibilityDescription: "Delete note")
-        menu.addItem(delete)
-        menu.popUp(
-            positioning: nil, at: NSPoint(x: 0, y: menuButton.bounds.height + 4), in: menuButton)
+        return menu
     }
 
     @objc private func levelChosen(_ sender: NSMenuItem) {
@@ -270,6 +283,9 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
 
     private func applyTint(_ color: NSColor) {
         tintView.layer?.backgroundColor = color.withAlphaComponent(Self.tintAlpha).cgColor
+        // Full strength on the dot: it's the colour's label, not another sheer wash of it.
+        colorDot.image = Swatch.image(
+            hex: Swatch.hex(from: color), size: Self.dotSize, radius: Self.dotSize / 2)
     }
 
     /// The chosen colour lands here (from a swatch click or live from the system panel):
@@ -280,9 +296,31 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         scheduleSave()
     }
 
+    /// The colour dot: step to the next palette colour. No menu — one click, one colour.
+    @objc private func cycleColor() {
+        apply(
+            color: Swatch.color(
+                fromHex: Swatch.next(after: colorHex, in: NotePreferences.shared.palette)))
+    }
+
     // MARK: - Show / hide
 
+    /// A single click on the red dot is the whole delete gesture, so a note with text asks first.
+    private func confirmDelete() -> Bool {
+        guard !textView.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return true
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Delete this note?"
+        alert.informativeText = "Its text will be lost."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     @objc private func deleteTapped() {
+        guard confirmDelete() else { return }
         let deletion = Note(text: "", dx: dx, dy: dy, color: colorHex)
         guard saveHandler(deletion) else { return }
         saver.cancel()  // a stale delayed save must not recreate the successfully deleted note
@@ -462,16 +500,24 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     }
 
     // User resized the note (drags don't land here — DragGlassView feeds dragTo directly):
-    // recompute the offset from the Finder window's top-left, clamp it back inside, then save.
+    // recompute the offset from the Finder window's top-left, hold it back inside, then save.
     private func noteGeometryChanged(resized: Bool) {
         guard !isProgrammaticMove else { return }
         let f = window.frame
-        if resized { desired = f.size }  // the user's chosen size — kept even when a small window caps it
         (dx, dy) = Coord.offsets(
             noteMinX: Double(f.minX), noteCocoaMaxY: Double(f.maxY),
             finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
             primaryHeight: Screens.primaryHeight())
-        storeClamped()
+        if resized {
+            // A resize stops dead at the border, like a drag does: cut the edge the user pushed
+            // past it, don't slide the note over — sliding is what made the note grow out of the
+            // opposite side. What survives the cut is the size the note keeps (`desired`).
+            let c = Coord.contain(dx: dx, dy: dy, note: f.size, window: tracked.size)
+            (dx, dy) = (c.dx, c.dy)
+            desired = c.size
+        } else {
+            storeClamped()
+        }
         applyPosition()
         scheduleSave()
     }

@@ -27,7 +27,7 @@ final class NotePreferences {
     /// The size a new note opens at, and the floor it can't shrink below. Fixed for now — no
     /// setters until there's UI to drive them. ponytail: make these `var` + persisted when that lands.
     let defaultSize = NSSize(width: 220, height: 170)
-    /// Any smaller and the swatch and trash buttons start eating the text.
+    /// Any smaller and the colour and delete dots start eating the text.
     let minSize = NSSize(width: 160, height: 120)
 
     // MARK: - Palette

@@ -21,13 +21,21 @@ enum Swatch {
             Int((c.blueComponent * 255).rounded()))
     }
 
-    /// A rounded swatch of the colour, for menu items and the note's colour button.
-    static func image(hex: String, size: CGFloat = 16) -> NSImage {
+    /// The next colour after `hex`, wrapping. A colour that isn't in the palette (it was removed,
+    /// or came from the "+" panel) starts the cycle over.
+    static func next(after hex: String, in palette: [String]) -> String {
+        guard let i = palette.firstIndex(of: hex) else { return palette.first ?? hex }
+        return palette[(i + 1) % palette.count]
+    }
+
+    /// A rounded swatch of the colour, for menu items and the note's colour dot
+    /// (`radius: size / 2` makes it a circle).
+    static func image(hex: String, size: CGFloat = 16, radius: CGFloat = 3) -> NSImage {
         let img = NSImage(size: NSSize(width: size, height: size))
         img.lockFocus()
         let path = NSBezierPath(
-            roundedRect: NSRect(x: 1, y: 1, width: size - 2, height: size - 2), xRadius: 3,
-            yRadius: 3)
+            roundedRect: NSRect(x: 1, y: 1, width: size - 2, height: size - 2), xRadius: radius,
+            yRadius: radius)
         color(fromHex: hex).setFill()
         path.fill()
         NSColor.black.withAlphaComponent(0.15).setStroke()

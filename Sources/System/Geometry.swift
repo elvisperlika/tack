@@ -36,6 +36,22 @@ enum Coord {
             min(max(0, dy), max(0, Double(window.height - note.height)))
         )
     }
+
+    /// A *user resize*, held inside the window: whichever edge ran past a border is cut back to
+    /// it, leaving the opposite edge where it is. `clamp` can't do this job — it slides the whole
+    /// note over, so pushing one edge into the border grew the note out of the other side.
+    static func contain(dx: Double, dy: Double, note: CGSize, window: CGSize) -> (
+        dx: Double, dy: Double, size: CGSize
+    ) {
+        let x = min(max(0, dx), Double(window.width))
+        let y = min(max(0, dy), Double(window.height))
+        return (
+            x, y,
+            CGSize(
+                width: max(0, min(dx + Double(note.width), Double(window.width)) - x),
+                height: max(0, min(dy + Double(note.height), Double(window.height)) - y))
+        )
+    }
 }
 
 enum Screens {
