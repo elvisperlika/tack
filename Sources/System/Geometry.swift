@@ -37,6 +37,13 @@ enum Coord {
         )
     }
 
+    /// Where a new note starts: centred in the window it's pinned to, as the offset of its
+    /// top-left corner. Fitted first, so a note capped by a small window is still centred.
+    static func center(note: CGSize, window: CGSize) -> (dx: Double, dy: Double) {
+        let size = fit(desired: note, window: window)
+        return (Double(window.width - size.width) / 2, Double(window.height - size.height) / 2)
+    }
+
     /// A *user resize*, held inside the window: whichever edge ran past a border is cut back to
     /// it, leaving the opposite edge where it is. `clamp` can't do this job — it slides the whole
     /// note over, so pushing one edge into the border grew the note out of the other side.

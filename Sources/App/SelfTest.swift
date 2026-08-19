@@ -14,6 +14,7 @@ enum SelfTest {
         fitToWindow()
         clampToWindow()
         containResize()
+        centerNewNote()
         colorHexRoundTrip()
         containerKeys()
         containerLoadFallback()
@@ -97,6 +98,14 @@ enum SelfTest {
         assert(Swatch.next(after: "AEC6FF", in: p) == "FFEB73", "cycle should wrap")
         assert(Swatch.next(after: "123456", in: p) == "FFEB73", "a colour off the palette restarts")
         assert(Swatch.next(after: "123456", in: []) == "123456", "an empty palette keeps the colour")
+    }
+
+    static func centerNewNote() {
+        let c = Coord.center(note: CGSize(width: 220, height: 170), window: CGSize(width: 500, height: 400))
+        assert(c.dx == 140 && c.dy == 115, "a new note should start centred")
+        // A window smaller than the note: it fills it, so there is nothing left to centre.
+        let tight = Coord.center(note: CGSize(width: 220, height: 170), window: CGSize(width: 100, height: 100))
+        assert(tight.dx == 0 && tight.dy == 0, "a note capped by the window sits at its top-left")
     }
 
     static func containResize() {
