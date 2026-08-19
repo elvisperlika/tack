@@ -6,9 +6,118 @@ private final class KeyableWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
-/// Clicking a checkbox glyph ticks it; every other click is an ordinary click.
+/// Clicking a checkbox glyph ticks it; every other click is an ordinary click. Also owns block
+/// mode: Esc steps out of the text and selects the block the caret was in, ↑/↓ walk between
+/// blocks, Enter drops back into one. A text view has no idea what a block is, so the selection
+/// is drawn here rather than being a text selection.
 private final class MarkdownTextView: NSTextView {
+    /// The selected block's paragraph range, or nil while editing. Nil is the normal state.
+    private var selectedBlock: NSRange?
+
+    private static let blockHighlight = NSColor.black.withAlphaComponent(0.07)  // a light grey wash
+
+    // MARK: - Block mode
+
+    /// Esc from editing selects the caret's block; Esc again, a click or typing leaves the mode.
+    /// `doCommand(by:)` rather than the delegate hook, so block mode sees keys before the
+    /// markdown rules do — in this mode ↑/↓ and Enter mean something else entirely.
+    override func doCommand(by selector: Selector) {
+        guard !handleBlockCommand(selector) else { return }
+        super.doCommand(by: selector)
+    }
+
+    private func handleBlockCommand(_ selector: Selector) -> Bool {
+        let ns = string as NSString
+        guard let block = selectedBlock else {
+            guard selector == #selector(cancelOperation(_:)) else { return false }
+            selectBlock(Blocks.range(in: ns, at: selectedRange().location))
+            return true
+        }
+        switch selector {
+        case #selector(moveUp(_:)), #selector(moveDown(_:)):
+            let delta = selector == #selector(moveUp(_:)) ? -1 : 1
+            if let next = Blocks.step(from: block, by: delta, in: ns) { selectBlock(next) }
+        case #selector(insertNewline(_:)):
+            editBlock(at: Blocks.contentEnd(block, in: ns))
+        case #selector(deleteBackward(_:)), #selector(deleteForward(_:)):
+            deleteBlock(block)
+        case #selector(cancelOperation(_:)):
+            editBlock(at: selectedRange().location)
+        default: break  // every other key is inert while a block is selected
+        }
+        return true
+    }
+
+    /// Canc removes the selected block and leaves you editing the end of the one above (the start
+    /// of the note, if it was the first). Through shouldChangeText, so ⌘Z brings it back.
+    private func deleteBlock(_ block: NSRange) {
+        guard let ts = textStorage else { return }
+        let ns = string as NSString
+        let caret = Blocks.step(from: block, by: -1, in: ns).map { Blocks.contentEnd($0, in: ns) } ?? 0
+        var range = block
+        // The last block has no newline of its own, so it takes the one that separates it from the
+        // block above — otherwise deleting it would leave an empty block behind.
+        if range.location + range.length == ns.length, range.location > 0 {
+            range = NSRange(location: range.location - 1, length: range.length + 1)
+        }
+        guard range.length > 0, shouldChangeText(in: range, replacementString: "") else { return }
+        ts.deleteCharacters(in: range)
+        didChangeText()
+        editBlock(at: caret)
+    }
+
+    private func selectBlock(_ range: NSRange) {
+        selectedBlock = range
+        scrollRangeToVisible(range)
+        insertionPointColor = .clear  // the block is the selection now; a caret would be a second one
+        needsDisplay = true
+    }
+
+    /// Back to editing, caret at `location`. Safe to call when no block is selected.
+    func editBlock(at location: Int) {
+        selectedBlock = nil
+        insertionPointColor = MarkdownStyle.textColor
+        setSelectedRange(NSRange(location: min(location, (string as NSString).length), length: 0))
+        needsDisplay = true
+    }
+
+    /// Typing with a block selected drops into it and appends, rather than doing nothing.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        if let block = selectedBlock {
+            editBlock(at: Blocks.contentEnd(block, in: self.string as NSString))
+        }
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if let rect = selectedBlock.flatMap(blockRect) {
+            Self.blockHighlight.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).fill()
+        }
+        super.draw(dirtyRect)
+    }
+
+    /// The selected block's wash: as tall as its lines (paragraph spacing excluded, so the gap
+    /// between blocks stays a gap) and as wide as the note.
+    private func blockRect(_ block: NSRange) -> NSRect? {
+        guard let lm = layoutManager, let tc = textContainer else { return nil }
+        let ns = string as NSString
+        let safe = NSIntersectionRange(block, NSRange(location: 0, length: ns.length))
+        var box = NSRect.zero
+        lm.enumerateLineFragments(forGlyphRange: lm.glyphRange(forCharacterRange: safe, actualCharacterRange: nil)) {
+            _, used, _, _, _ in
+            box = box.isEmpty ? used : box.union(used)
+        }
+        if box.isEmpty { box = lm.extraLineFragmentUsedRect }  // the document's final empty block
+        guard box.height > 0 else { return nil }
+        let origin = textContainerOrigin
+        return NSRect(x: 2, y: box.minY + origin.y - 2, width: bounds.width - 4, height: box.height + 4)
+    }
+
+    // MARK: - Checkboxes
+
     override func mouseDown(with event: NSEvent) {
+        editBlock(at: selectedRange().location)  // a click is always editing
         let i = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
         let ns = string as NSString
         // A click on the glyph can resolve to either side of it, so check both insertion sides.
@@ -82,7 +191,7 @@ private final class DragGlassView: NSVisualEffectView {
 final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private let window: KeyableWindow
     private let tintView: NSView  // the palette colour, sheer, over the glass
-    private let textView: NSTextView
+    private let textView: MarkdownTextView
     private let colorDot: NSButton  // wears the note's colour; each click takes the next one
     private let deleteDot: NSButton  // red: deletes the note
     private var reforming = false  // guards the input rules' own edits from re-entering textDidChange
@@ -190,6 +299,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         scroll.hasVerticalScroller = false
         scroll.autoresizingMask = [.width, .height]
         textView = MarkdownTextView(frame: scroll.bounds)
+        _ = textView.layoutManager  // block mode measures line fragments: take TextKit 1 now, not mid-draw
         textView.drawsBackground = false
         textView.font = MarkdownStyle.baseFont
         textView.textColor = .black
@@ -343,8 +453,10 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         applyTint(Swatch.color(fromHex: colorHex))
         // Load markdown as rich text (markers consumed into attributes). Programmatic, so it
         // fires no textDidChange — nothing to save, and no input rule should run on a load.
+        textView.editBlock(at: 0)  // the window is reused: never carry a block selection over
         textView.textStorage?.setAttributedString(MarkdownDocument.parse(note.text))
         textView.typingAttributes = MarkdownStyle.base
+        MarkdownInput.syncTypingToBlock(textView)  // a note that opens on a heading types as one
         desired = NSSize(
             width: note.w ?? NotePreferences.shared.defaultSize.width,
             height: note.h ?? NotePreferences.shared.defaultSize.height)
@@ -542,6 +654,12 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
             reforming = false
         }
         scheduleSave()
+    }
+
+    /// Blocks keep their style wherever you type in them: on every caret move the block under it
+    /// hands its heading level to the typing attributes.
+    func textViewDidChangeSelection(_ notification: Notification) {
+        MarkdownInput.syncTypingToBlock(textView)
     }
 
     /// Enter starts a body line; Backspace at a heading's start un-headings it. Everything else

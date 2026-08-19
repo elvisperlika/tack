@@ -28,6 +28,9 @@ enum SelfTest {
         markdownParse()
         markdownRoundTrip()
         markdownInlineClosing()
+        blockStyleAtCaret()
+        blockNavigation()
+        backspaceAtTheEnd()
         noteSizeIsOptional()
         urlNormalization()
         notePreferencesPalette()
@@ -556,6 +559,55 @@ extension SelfTest {
             let round = MarkdownDocument.serialize(MarkdownDocument.parse(md))
             assert(round == md, "round-trip changed \(md.debugDescription) -> \(round.debugDescription)")
         }
+    }
+
+    /// Blocks own their style: anywhere inside a heading block reports that heading, including its
+    /// very start, where the caret's neighbour is the previous block's newline.
+    static func blockStyleAtCaret() {
+        let doc = MarkdownDocument.parse("# Title\nbody\n## Two")
+        let start = (doc.string as NSString).range(of: "Title").location
+        assert(MarkdownInput.blockHeading(doc, at: start) == 1, "block start should still be H1")
+        assert(MarkdownInput.blockHeading(doc, at: start + 3) == 1, "mid-block should be H1")
+        let body = (doc.string as NSString).range(of: "body").location
+        assert(MarkdownInput.blockHeading(doc, at: body) == nil, "a body block has no heading")
+        assert(
+            MarkdownInput.blockHeading(doc, at: (doc.string as NSString).range(of: "Two").location) == 2,
+            "the last block should be H2")
+        // An empty block carries no mark, so there is nothing to report.
+        let blank = MarkdownDocument.parse("a\n\nb")
+        assert(MarkdownInput.blockHeading(blank, at: 2) == nil, "an empty block reports no heading")
+    }
+
+    /// Block mode's walk: Esc selects the caret's block, ↑/↓ step, Enter re-enters at its end.
+    static func blockNavigation() {
+        let text = "# Title\nbody\n\nlast" as NSString
+        let first = Blocks.range(in: text, at: 3)
+        assert(text.substring(with: first) == "# Title\n", "the caret's block is its paragraph")
+        assert(Blocks.step(from: first, by: -1, in: text) == nil, "nothing above the first block")
+
+        let second = Blocks.step(from: first, by: 1, in: text)!
+        assert(text.substring(with: second) == "body\n", "↓ should step to the next block")
+        assert(Blocks.step(from: second, by: -1, in: text) == first, "↑ should step back")
+
+        let blank = Blocks.step(from: second, by: 1, in: text)!
+        assert(text.substring(with: blank) == "\n", "an empty block is a block")
+        let last = Blocks.step(from: blank, by: 1, in: text)!
+        assert(Blocks.step(from: last, by: 1, in: text) == nil, "nothing below the last block")
+
+        // Enter drops in after the text, never after the newline (that is the next block).
+        assert(Blocks.contentEnd(first, in: text) == 7, "caret lands at the end of the block's text")
+        assert(Blocks.contentEnd(last, in: text) == text.length, "a block without a newline ends at its end")
+    }
+
+    /// Backspace on an empty last block used to read an attribute one past the end of the text and
+    /// take the app down with it. Nothing to handle here — it falls through to the text view.
+    static func backspaceAtTheEnd() {
+        let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        tv.textStorage?.setAttributedString(MarkdownDocument.parse("a\n"))
+        tv.setSelectedRange(NSRange(location: 2, length: 0))
+        let handled = MarkdownInput.handle(
+            #selector(NSStandardKeyBindingResponding.deleteBackward(_:)), tv)
+        assert(!handled, "backspace on an empty last block is the text view's own deletion")
     }
 
     static func noteSizeIsOptional() {

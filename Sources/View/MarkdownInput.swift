@@ -1,5 +1,30 @@
 import AppKit
 
+/// A block is a paragraph. Pure ranges, so `--selftest` can walk them without a text view.
+enum Blocks {
+    /// The block holding `loc`, its trailing newline included.
+    static func range(in text: NSString, at loc: Int) -> NSRange {
+        text.lineRange(for: NSRange(location: min(max(0, loc), text.length), length: 0))
+    }
+
+    /// The block above (`delta < 0`) or below, or nil at the document's ends.
+    static func step(from block: NSRange, by delta: Int, in text: NSString) -> NSRange? {
+        if delta < 0 {
+            guard block.location > 0 else { return nil }
+            return range(in: text, at: block.location - 1)
+        }
+        let after = block.location + block.length
+        guard after < text.length else { return nil }
+        return range(in: text, at: after)
+    }
+
+    /// Where the caret lands when you step into a block: after its text, before its newline.
+    static func contentEnd(_ block: NSRange, in text: NSString) -> Int {
+        let end = min(block.location + block.length, text.length)
+        return text.substring(with: block).hasSuffix("\n") ? end - 1 : end
+    }
+}
+
 /// Live "type markdown, get formatting" rules for the rich note editor. Every mutation goes
 /// through shouldChangeText/didChangeText so undo and the change notification fire. Stateless —
 /// the text view is the state.
@@ -110,6 +135,34 @@ enum MarkdownInput {
         }
     }
 
+    /// The heading level of the block (the paragraph) holding `loc`, or nil for a body block —
+    /// and for an empty one, which has no character to carry the mark. Read from the block's first
+    /// character rather than the caret's neighbour: at a block's start that neighbour is the
+    /// *previous* block's newline, which is how typing at the head of a heading lost its style.
+    static func blockHeading(_ text: NSAttributedString, at loc: Int) -> Int? {
+        let ns = text.string as NSString
+        guard loc <= ns.length else { return nil }
+        let line = ns.lineRange(for: NSRange(location: loc, length: 0))
+        let contentLen = line.length - (ns.substring(with: line).hasSuffix("\n") ? 1 : 0)
+        guard contentLen > 0 else { return nil }
+        return text.attribute(.tackHeading, at: line.location, effectiveRange: nil) as? Int
+    }
+
+    /// The caret moved: the block it landed in owns the style from here on. Only the block half is
+    /// restored — the inline half stays as AppKit inherited it, so ⌘B then typing still bolds.
+    /// An empty block is left alone: a just-typed `# ` has no text yet to read the level back from.
+    static func syncTypingToBlock(_ tv: NSTextView) {
+        guard let ts = tv.textStorage, tv.selectedRange().length == 0 else { return }
+        let sel = tv.selectedRange()
+        let ns = ts.string as NSString
+        let line = ns.lineRange(for: NSRange(location: min(sel.location, ns.length), length: 0))
+        let contentLen = line.length - (ns.substring(with: line).hasSuffix("\n") ? 1 : 0)
+        guard contentLen > 0 else { return }
+        let inline = (tv.typingAttributes[.tackInline] as? String).flatMap(InlineStyle.init)
+        tv.typingAttributes = MarkdownStyle.attributes(
+            inline: inline, heading: blockHeading(ts, at: sel.location))
+    }
+
     /// ⌘B / ⌘I: toggle an inline style on the selection, or on the next-typed text if none.
     static func toggle(_ style: InlineStyle, _ tv: NSTextView) {
         guard let ts = tv.textStorage else { return }
@@ -174,10 +227,9 @@ enum MarkdownInput {
         if ListGlyph.leading(lineText) != nil, sel.location == line.location + ListGlyph.width {
             return replace(tv, NSRange(location: line.location, length: ListGlyph.width), "", caret: line.location)
         }
-        if sel.location == line.location,
-            let level = ts.attribute(.tackHeading, at: line.location, effectiveRange: nil) as? Int,
-            level > 0
-        {
+        // headingLevel, not a bare attribute read: an empty last block starts at the very end of
+        // the text, where there is no character to read and the raw call raises out of range.
+        if sel.location == line.location, let level = headingLevel(ts, at: line.location), level > 0 {
             let contentLen = line.length - (lineText.hasSuffix("\n") ? 1 : 0)
             let range = NSRange(location: line.location, length: contentLen)
             guard tv.shouldChangeText(in: range, replacementString: nil) else { return true }
@@ -197,8 +249,11 @@ enum MarkdownInput {
         guard tv.shouldChangeText(in: range, replacementString: text) else { return true }
         ts.replaceCharacters(in: range, with: NSAttributedString(string: text, attributes: MarkdownStyle.base))
         tv.didChangeText()
-        tv.setSelectedRange(NSRange(location: caret, length: 0))
+        // Body first, then move: the selection change runs `syncTypingToBlock`, so an Enter that
+        // *splits* a heading keeps typing in that heading while one that opens an empty block below
+        // it (nothing to read a level from) stays body.
         tv.typingAttributes = MarkdownStyle.base
+        tv.setSelectedRange(NSRange(location: caret, length: 0))
         return true
     }
 
