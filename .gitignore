@@ -12,3 +12,4 @@ CLAUDE.md
 .claude/
 docs/superpowers/
 docs/audit/
+docs/audit/*

@@ -89,14 +89,14 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     /// while the controller owns what it *means*.
     private var pinChoices: [(level: Int, label: String)] = []
     private var pinCurrent = 0
-    private var onPickLevel: (Int) -> Void = { _ in }
+    private var onPickLevel: (Int) -> Bool = { _ in true }
     private let saver = Debouncer(delay: 0.5)  // collapse typing/drag bursts into one write
 
     /// Called after the user deletes the note (so the app can stop tracking it).
     var onDelete: (() -> Void)?
 
     private var colorHex = NotePreferences.shared.defaultColorHex
-    private var saveHandler: (Note) -> Void = { _ in }  // where the current note persists
+    private var saveHandler: (Note) -> Bool = { _ in true }  // persists or reports failure
     /// The tracked window, top-left screen coords. One value, because its origin and size only
     /// ever change together — three loose fields drifting apart was a bug waiting to happen.
     private var tracked = CGRect.zero
@@ -213,7 +213,10 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     /// The scopes this note can pin to. The controller pushes them (with the current one) on
     /// every show; `< 2` means nothing to choose, so the menu skips the pin section — matching
     /// Finder, which has one level.
-    func setPinLevels(_ choices: [(level: Int, label: String)], current: Int, onPick: @escaping (Int) -> Void) {
+    func setPinLevels(
+        _ choices: [(level: Int, label: String)], current: Int,
+        onPick: @escaping (Int) -> Bool
+    ) {
         pinChoices = choices
         pinCurrent = current
         onPickLevel = onPick
@@ -253,9 +256,9 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     }
 
     @objc private func levelChosen(_ sender: NSMenuItem) {
-        saver.flush()  // move the latest edit, not the last version already on disk
+        guard saver.flush() else { return }  // never move an older version after a failed save
+        guard onPickLevel(sender.tag) else { return }
         pinCurrent = sender.tag
-        onPickLevel(sender.tag)
     }
 
     // MARK: - Colour
@@ -280,16 +283,18 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     // MARK: - Show / hide
 
     @objc private func deleteTapped() {
-        saver.cancel()  // a stale delayed save must not recreate the deleted note
-        saveHandler(Note(text: "", dx: dx, dy: dy, color: colorHex))  // empty text removes the note
+        let deletion = Note(text: "", dx: dx, dy: dy, color: colorHex)
+        guard saveHandler(deletion) else { return }
+        saver.cancel()  // a stale delayed save must not recreate the successfully deleted note
         active = false
         applyVisibility()
         onDelete?()
     }
 
     /// Show `note`, positioned relative to the tracked window's top-left; `save` persists edits.
-    func show(note: Note, bounds: CGRect, save: @escaping (Note) -> Void) {
-        saver.flush()  // finish the outgoing note before replacing its state and save handler
+    @discardableResult
+    func show(note: Note, bounds: CGRect, save: @escaping (Note) -> Bool) -> Bool {
+        guard saver.flush() else { return false }
         self.saveHandler = save
         self.dx = note.dx
         self.dy = note.dy
@@ -310,6 +315,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         // going through applyVisibility — otherwise the incoming note would just teleport in.
         shown = true
         popIn()
+        return true
     }
 
     /// Hide when another window covers the note's spot on the Finder window (and vice versa).
@@ -339,7 +345,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     }
 
     /// The process may terminate before the debounce delay expires.
-    func flushPendingSave() { saver.flush() }
+    @discardableResult func flushPendingSave() -> Bool { saver.flush() }
 
     func focusForEditing() {
         window.makeKeyAndOrderFront(nil)

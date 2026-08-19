@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var trackLink: CADisplayLink? {  // vsync glue: the shown note follows its window
         didSet { oldValue?.invalidate() }  // an outlived link would keep firing
     }
+    private var lastPersistenceError: String?
 
     var current: Container?
 
@@ -33,8 +34,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        note.flushPendingSave()
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        note.flushPendingSave() ? .terminateNow : .terminateCancel
     }
 
     // MARK: - Target resolution
@@ -66,17 +67,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             current = nil
             return
         }
-        current = container
         // ponytail: opt-in path logging for diagnosing identity. Enable with
         //   defaults write com.tack.app debugPaths -bool YES
         // then watch with: log stream --predicate 'process == "Tack"'
         if UserDefaults.standard.bool(forKey: "debugPaths") {
             NSLog("[tack] path=%@", container.path.joined(separator: " / "))
         }
-        if let hit = container.load() {
-            showNote(hit.note, frame: f, container: container, level: hit.level)
-        } else {
+        do {
+            if let hit = try container.load() {
+                guard showNote(hit.note, frame: f, container: container, level: hit.level) else {
+                    return
+                }
+            } else {
+                hideNote()
+            }
+            current = container
+            lastPersistenceError = nil
+        } catch {
             hideNote()
+            reportPersistenceError(error)
         }
     }
 
@@ -104,19 +113,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Show / hide
 
-    func showNote(_ n: Note, frame f: Frame, container: Container, level: Int) {
+    @discardableResult
+    func showNote(_ n: Note, frame f: Frame, container: Container, level: Int) -> Bool {
         let box = LevelBox(level)  // this note's own level cell — see LevelBox
-        note.show(note: n, bounds: f.bounds) { edited in container.write(edited, at: box.value) }
+        let shown = note.show(note: n, bounds: f.bounds) { [weak self] edited in
+            self?.persist { try container.write(edited, at: box.value) } ?? false
+        }
+        guard shown else { return false }
         let choices = (container.minLevel...container.finestLevel).map {
             (level: $0, label: LevelName.label(level: $0, of: container.path.count))
         }
-        note.setPinLevels(choices, current: level) { newLevel in
-            guard let hit = container.load() else { return }
-            container.move(hit.note, from: hit.level, to: newLevel)
+        note.setPinLevels(choices, current: level) { [weak self] newLevel in
+            guard let self else { return false }
+            let moved = persist {
+                guard let hit = try container.load() else { return }
+                try container.move(hit.note, from: hit.level, to: newLevel)
+            }
+            guard moved else { return false }
             box.value = newLevel  // redirect this note's later edits — same cell the save closure reads
+            return true
         }
         apply(f)
         startTracking()
+        return true
+    }
+
+    @discardableResult
+    func persist(_ operation: () throws -> Void) -> Bool {
+        do {
+            try operation()
+            lastPersistenceError = nil
+            return true
+        } catch {
+            reportPersistenceError(error)
+            return false
+        }
+    }
+
+    func reportPersistenceError(_ error: Error) {
+        let message = error.localizedDescription
+        guard message != lastPersistenceError else { return }
+        lastPersistenceError = message
+        NSLog("[tack] persistence error: %@", message)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Tack could not save your note"
+        alert.informativeText = message
+        alert.runModal()
     }
 
     private func hideNote() {

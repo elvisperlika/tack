@@ -57,11 +57,18 @@ extension AppDelegate {
 
     @objc func addNote() {
         guard let container = resolve(), let f = container.frame() else { return }
-        current = container
-        let hit = container.load()
-        showNote(
+        let hit: (note: Note, level: Int)?
+        do {
+            hit = try container.load()
+        } catch {
+            reportPersistenceError(error)
+            return
+        }
+        guard showNote(
             hit?.note ?? Note(text: "", dx: 20, dy: 40), frame: f, container: container,
             level: hit?.level ?? container.finestLevel)  // finest available, promote later
+        else { return }
+        current = container
         NSApp.activate(ignoringOtherApps: true)
         note.focusForEditing()
     }

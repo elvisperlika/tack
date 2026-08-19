@@ -5,6 +5,9 @@ import Foundation
 enum SelfTest {
     static func run() {
         noteStoreRoundTrip()
+        corruptJSONIsPreserved()
+        writeFailureIsReported()
+        centralBackupKeepsPreviousVersion()
         appNotesRoundTrip()
         stableKeyMigration()
         coordFlip()
@@ -14,6 +17,7 @@ enum SelfTest {
         containerKeys()
         containerLoadFallback()
         containerPromotion()
+        containerMovePreservesSourceOnFailure()
         finderContainerRoundTrip()
         genericKeyMatchesLegacyFormat()
         levelLabels()
@@ -29,26 +33,38 @@ enum SelfTest {
     }
 
     static func appNotesRoundTrip() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("appnotes.json")
         let key = "selftest|" + UUID().uuidString  // unique: never clobbers a real note
         let n = Note(text: "hello", dx: 12, dy: 34)
-        AppNotes.save(key: key, note: n)
-        assert(AppNotes.load(key: key) == n, "app note round-trip mismatch")
+        try! AppNotes.save(key: key, note: n, to: url)
+        let loaded = try! AppNotes.load(key: key, from: url)
+        assert(loaded == n, "app note round-trip mismatch")
 
-        AppNotes.save(key: key, note: Note(text: "", dx: 12, dy: 34))
-        assert(AppNotes.load(key: key) == nil, "empty text should delete the app note")
+        try! AppNotes.save(key: key, note: Note(text: "", dx: 12, dy: 34), to: url)
+        let deleted = try! AppNotes.load(key: key, from: url)
+        assert(deleted == nil, "empty text should delete the app note")
     }
 
     static func stableKeyMigration() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("appnotes.json")
         let id = UUID().uuidString
         let legacy = "selftest|old-title|\(id)"
         let stable = "selftest|\(id)"
         let n = Note(text: "migrate me", dx: 12, dy: 34)
-        AppNotes.save(key: legacy, note: n)
-        defer { AppNotes.save(key: stable, note: Note(text: "", dx: 0, dy: 0)) }
+        try! AppNotes.save(key: legacy, note: n, to: url)
 
-        assert(AppNotes.load(key: stable, migrating: legacy) == n, "legacy note should migrate")
-        assert(AppNotes.load(key: stable) == n, "migrated note should use the stable key")
-        assert(AppNotes.load(key: legacy) == nil, "legacy title-dependent key should be removed")
+        let migrated = try! AppNotes.load(key: stable, migrating: legacy, from: url)
+        let stableNote = try! AppNotes.load(key: stable, from: url)
+        let legacyNote = try! AppNotes.load(key: legacy, from: url)
+        assert(migrated == n, "legacy note should migrate")
+        assert(stableNote == n, "migrated note should use the stable key")
+        assert(legacyNote == nil, "legacy title-dependent key should be removed")
     }
 
     static func notePreferencesPalette() {
@@ -88,14 +104,70 @@ enum SelfTest {
         let folder = dir.path
 
         let n = Note(text: "hello", dx: 12, dy: 34)
-        NoteStore.save(folder: folder, note: n)
-        assert(NoteStore.load(folder: folder) == n, "round-trip mismatch")
+        try! NoteStore.save(folder: folder, note: n)
+        let loaded = try! NoteStore.load(folder: folder)
+        assert(loaded == n, "round-trip mismatch")
 
-        NoteStore.save(folder: folder, note: Note(text: "", dx: 12, dy: 34))
-        assert(NoteStore.load(folder: folder) == nil, "empty text should delete the note")
+        try! NoteStore.save(folder: folder, note: Note(text: "", dx: 12, dy: 34))
+        let deleted = try! NoteStore.load(folder: folder)
+        assert(deleted == nil, "empty text should delete the note")
         assert(
             !FileManager.default.fileExists(atPath: NoteStore.fileURL(forFolder: folder).path),
             "file should be gone")
+    }
+
+    static func corruptJSONIsPreserved() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = NoteStore.fileURL(forFolder: dir.path)
+        let corrupt = Data("{recover me".utf8)
+        try! corrupt.write(to: url)
+
+        do {
+            _ = try NoteStore.load(folder: dir.path)
+            assert(false, "invalid JSON must not look like a missing note")
+        } catch NotePersistenceError.invalidJSON(_, let recovery, _) {
+            assert(recovery != nil, "invalid JSON should get a recovery copy")
+            assert((try? Data(contentsOf: recovery!)) == corrupt, "recovery copy changed the data")
+        } catch {
+            assert(false, "unexpected persistence error: \(error)")
+        }
+
+        do {
+            try NoteStore.save(folder: dir.path, note: Note(text: "new", dx: 1, dy: 2))
+            assert(false, "saving must not overwrite invalid JSON")
+        } catch {}
+        assert((try? Data(contentsOf: url)) == corrupt, "invalid original must remain untouched")
+    }
+
+    static func centralBackupKeepsPreviousVersion() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("appnotes.json")
+        let old = Note(text: "first", dx: 1, dy: 2)
+        let new = Note(text: "second", dx: 3, dy: 4)
+
+        try! AppNotes.save(key: "old", note: old, to: url)
+        try! AppNotes.save(key: "new", note: new, to: url)
+        let current = try! AppNotes.load(key: "new", from: url)
+        let backup = try! AppNotes.load(key: "old", from: url.appendingPathExtension("backup"))
+        assert(current == new, "the current file should contain the new value")
+        assert(backup == old, "the backup should preserve the previous complete value")
+    }
+
+    static func writeFailureIsReported() {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathComponent("missing")
+        do {
+            try NoteStore.save(folder: missing.path, note: Note(text: "nope", dx: 1, dy: 2))
+            assert(false, "an unwritable destination must throw")
+        } catch NotePersistenceError.write(let url, _) {
+            assert(url == NoteStore.fileURL(forFolder: missing.path), "error should name the file")
+        } catch {
+            assert(false, "unexpected persistence error: \(error)")
+        }
     }
 
     static func fitToWindow() {
@@ -138,22 +210,31 @@ enum SelfTest {
     static func debouncerCollapses() {
         let d = Debouncer(delay: 0.05)
         var hits: [Int] = []
-        d.call { hits.append(1) }
-        d.call { hits.append(2) }  // must cancel the first
+        d.call { hits.append(1); return true }
+        d.call { hits.append(2); return true }  // must cancel the first
         // Spinning the main run loop drains the main dispatch queue in a CLI process.
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         assert(hits == [2], "only the last scheduled block should fire: \(hits)")
 
-        d.call { hits.append(3) }
+        d.call { hits.append(3); return true }
         d.flush()
         assert(hits == [2, 3], "flush should run the pending block immediately: \(hits)")
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         assert(hits == [2, 3], "a flushed block must not run again: \(hits)")
 
-        d.call { hits.append(4) }
+        d.call { hits.append(4); return true }
         d.cancel()
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         assert(hits == [2, 3], "cancel should drop the pending block: \(hits)")
+
+        var attempts = 0
+        d.call {
+            attempts += 1
+            return attempts > 1
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        assert(attempts == 1, "the scheduled save should have failed once")
+        assert(d.flush() && attempts == 2, "flush should retry retained failed work")
     }
 
     static func coordFlip() {
@@ -175,10 +256,14 @@ enum SelfTest {
 /// A Container with in-memory storage, so the lookup and promotion logic can be tested
 /// without an app, a window, or an Accessibility grant. This is the payoff of the class
 /// over the old enum.
+private enum FakeWriteError: Error { case blocked }
+
 final class FakeContainer: Container {
     private var storage: [String: Note] = [:]
     private let ident: [String]
     private let stableFinestKey: String?
+    var failingLevel: Int?
+    var writes: [Int] = []
 
     init(path: [String], finestKey: String? = nil) {
         self.ident = path
@@ -187,8 +272,10 @@ final class FakeContainer: Container {
 
     override var path: [String] { ident }
     override var finestKey: String? { stableFinestKey }
-    override func note(at level: Int) -> Note? { storage[key(at: level)] }
-    override func write(_ note: Note, at level: Int) {
+    override func note(at level: Int) throws -> Note? { storage[key(at: level)] }
+    override func write(_ note: Note, at level: Int) throws {
+        writes.append(level)
+        if failingLevel == level { throw FakeWriteError.blocked }
         storage[key(at: level)] = note.isDeletion ? nil : note
     }
 }
@@ -218,28 +305,60 @@ extension SelfTest {
         let c = FakeContainer(path: ["app", "win", "tab"])
         let n = Note(text: "hi", dx: 1, dy: 2)
 
-        assert(c.load() == nil, "no note anywhere should not resolve")
+        let empty = try! c.load()
+        assert(empty == nil, "no note anywhere should not resolve")
 
-        c.write(n, at: 1)  // a window-level note
-        guard let hit = c.load() else {
+        try! c.write(n, at: 1)  // a window-level note
+        guard let hit = try! c.load() else {
             assert(false, "a window note should be visible from the tab")
             return
         }
         assert(hit.note == n && hit.level == 1, "should fall back to the window level: \(hit)")
 
-        c.write(Note(text: "tab", dx: 3, dy: 4), at: 2)
-        assert(c.load()?.level == 2, "the finest note wins when both exist")
+        try! c.write(Note(text: "tab", dx: 3, dy: 4), at: 2)
+        let finest = try! c.load()
+        assert(finest?.level == 2, "the finest note wins when both exist")
     }
 
     static func containerPromotion() {
         let c = FakeContainer(path: ["app", "win", "tab"])
         let n = Note(text: "hi", dx: 1, dy: 2)
-        c.write(n, at: 2)
+        try! c.write(n, at: 2)
 
-        c.move(n, from: 2, to: 1)
-        assert(c.note(at: 2) == nil, "the old key should be gone after promotion")
-        assert(c.note(at: 1) == n, "the note should live at the window level now")
-        assert(c.load()?.level == 1, "and lookup should find it there")
+        try! c.move(n, from: 2, to: 1)
+        let old = try! c.note(at: 2)
+        let promoted = try! c.note(at: 1)
+        let loaded = try! c.load()
+        assert(old == nil, "the old key should be gone after promotion")
+        assert(promoted == n, "the note should live at the window level now")
+        assert(loaded?.level == 1, "and lookup should find it there")
+    }
+
+    static func containerMovePreservesSourceOnFailure() {
+        let c = FakeContainer(path: ["app", "win", "tab"])
+        let n = Note(text: "safe", dx: 1, dy: 2)
+        try! c.write(n, at: 2)
+        c.writes = []
+        c.failingLevel = 1
+
+        do {
+            try c.move(n, from: 2, to: 1)
+            assert(false, "a failed destination write must throw")
+        } catch {}
+        assert(c.writes == [1], "destination must be attempted before source deletion")
+        let source = try! c.note(at: 2)
+        assert(source == n, "a failed destination write must preserve the source")
+
+        c.writes = []
+        c.failingLevel = 2
+        do {
+            try c.move(n, from: 2, to: 1)
+            assert(false, "a failed source deletion must throw")
+        } catch {}
+        assert(c.writes == [1, 2], "move must write destination, then delete source")
+        let duplicatedSource = try! c.note(at: 2)
+        let destination = try! c.note(at: 1)
+        assert(duplicatedSource == n && destination == n, "failure may duplicate, never lose the note")
     }
 
     static func finderContainerRoundTrip() {
@@ -256,15 +375,16 @@ extension SelfTest {
         assert(c.finestLevel == 1, "finder path should be two components")
 
         let n = Note(text: "hi", dx: 1, dy: 2)
-        c.write(n, at: 1)
-        guard let hit = c.load() else {
+        try! c.write(n, at: 1)
+        guard let hit = try! c.load() else {
             assert(false, "finder note should round-trip")
             return
         }
         assert(hit.note == n && hit.level == 1, "finder round-trip mismatch: \(hit)")
 
-        c.write(Note(text: "", dx: 1, dy: 2), at: 1)
-        assert(c.load() == nil, "empty text should delete the folder note")
+        try! c.write(Note(text: "", dx: 1, dy: 2), at: 1)
+        let deleted = try! c.load()
+        assert(deleted == nil, "empty text should delete the folder note")
     }
 
     static func genericKeyMatchesLegacyFormat() {

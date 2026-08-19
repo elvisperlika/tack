@@ -4,25 +4,25 @@ import Foundation
 /// and schedules its own after the quiet interval, on the main queue.
 final class Debouncer {
     private let delay: TimeInterval
-    private var pending: (() -> Void)?
+    private var pending: (() -> Bool)?
     private var generation = 0
 
     init(delay: TimeInterval) { self.delay = delay }
 
-    func call(_ block: @escaping () -> Void) {
+    func call(_ block: @escaping () -> Bool) {
         generation += 1
         let scheduled = generation
         pending = block
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, generation == scheduled else { return }
-            runPending()
+            _ = runPending()
         }
     }
 
     /// Run the latest block now. Older scheduled callbacks are invalidated by the generation.
-    func flush() {
+    @discardableResult func flush() -> Bool {
         generation += 1
-        runPending()
+        return runPending()
     }
 
     /// Drop the latest block, for terminal actions such as deleting the value it would save.
@@ -31,9 +31,10 @@ final class Debouncer {
         pending = nil
     }
 
-    private func runPending() {
-        let block = pending
+    private func runPending() -> Bool {
+        guard let block = pending else { return true }
+        guard block() else { return false }  // retain failed work so a lifecycle flush can retry
         pending = nil
-        block?()
+        return true
     }
 }

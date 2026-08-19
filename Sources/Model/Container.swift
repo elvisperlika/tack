@@ -45,8 +45,8 @@ class Container {
 
     // MARK: - Storage (subclass supplies)
 
-    func note(at level: Int) -> Note? { nil }
-    func write(_ note: Note, at level: Int) {}
+    func note(at level: Int) throws -> Note? { nil }
+    func write(_ note: Note, at level: Int) throws {}
 
     // MARK: - Position (subclass supplies)
 
@@ -60,20 +60,19 @@ class Container {
     /// was written under. A window-level note is therefore found by every tab in that window
     /// for free, and there's no chicken-and-egg where you'd need the level to build the key
     /// to load the note that holds the level.
-    final func load() -> (note: Note, level: Int)? {
+    final func load() throws -> (note: Note, level: Int)? {
         guard !path.isEmpty else { return nil }
         for level in stride(from: finestLevel, through: minLevel, by: -1) {
-            if let n = note(at: level) { return (n, level) }
+            if let n = try note(at: level) { return (n, level) }
         }
         return nil
     }
 
-    /// Promotion. Empty text is the delete convention in both stores, so this is
-    /// delete-at-the-old-key then write-at-the-new-one.
-    final func move(_ note: Note, from: Int, to: Int) {
+    /// Write the destination first. If either operation fails, at least one complete copy remains.
+    final func move(_ note: Note, from: Int, to: Int) throws {
         guard from != to else { return }
-        write(Note(text: "", dx: note.dx, dy: note.dy, color: note.color), at: from)
-        write(note, at: to)
+        try write(note, at: to)
+        try write(Note(text: "", dx: note.dx, dy: note.dy, color: note.color), at: from)
     }
 }
 
@@ -91,8 +90,10 @@ final class FinderContainer: Container {
     override var minLevel: Int { 1 }
 
     // ponytail: one level exists here, so `level` is always 1 and the folder is the key
-    override func note(at level: Int) -> Note? { NoteStore.load(folder: folder) }
-    override func write(_ note: Note, at level: Int) { NoteStore.save(folder: folder, note: note) }
+    override func note(at level: Int) throws -> Note? { try NoteStore.load(folder: folder) }
+    override func write(_ note: Note, at level: Int) throws {
+        try NoteStore.save(folder: folder, note: note)
+    }
 
     /// Polled at 60fps to glue the note to the window. CGWindowList gives bounds and
     /// occluders in the same pass.
@@ -125,15 +126,15 @@ class GenericAppContainer: Container {
 
     override var path: [String] { [bundleID, ident] }
 
-    override func note(at level: Int) -> Note? {
+    override func note(at level: Int) throws -> Note? {
         let currentKey = key(at: level)
         // Before stable tab keys, the mutable title was part of the key. Migrate on first read;
         // writing the new key before deleting the old one makes an interrupted migration harmless.
         let legacyKey = Container.key(path: path, level: level)
-        return AppNotes.load(key: currentKey, migrating: legacyKey)
+        return try AppNotes.load(key: currentKey, migrating: legacyKey)
     }
-    override func write(_ note: Note, at level: Int) {
-        AppNotes.save(key: key(at: level), note: note)
+    override func write(_ note: Note, at level: Int) throws {
+        try AppNotes.save(key: key(at: level), note: note)
     }
 
     /// A focused app window is already on top, so nothing covers the note — `covering` stays
