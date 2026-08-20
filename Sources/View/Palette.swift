@@ -23,7 +23,9 @@ enum Swatch {
 
     /// A rounded swatch of the colour, for menu items and the note's colour dot
     /// (`radius: size / 2` makes it a circle).
-    static func image(hex: String, size: CGFloat = 16, radius: CGFloat = 3) -> NSImage {
+    static func image(
+        hex: String, size: CGFloat = 16, radius: CGFloat = 3, borderWidth: CGFloat = 1
+    ) -> NSImage {
         let img = NSImage(size: NSSize(width: size, height: size))
         img.lockFocus()
         let path = NSBezierPath(
@@ -32,6 +34,7 @@ enum Swatch {
         color(fromHex: hex).setFill()
         path.fill()
         NSColor.black.withAlphaComponent(0.15).setStroke()
+        path.lineWidth = borderWidth
         path.stroke()
         img.unlockFocus()
         return img
@@ -42,6 +45,19 @@ enum Swatch {
 /// the note pill's colour picker — both need the click to say *which* swatch it was.
 final class ColorSwatchButton: NSButton {
     var hex = ""
+    var onHover: ((Bool) -> Void)?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(
+            NSTrackingArea(
+                rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
 }
 
 /// The colour-picking UI: the swatch grid (each swatch wears a tiny × to delete it) and the

@@ -11,6 +11,8 @@ private final class KeyableWindow: NSWindow {
 /// blocks, Enter drops back into one. A text view has no idea what a block is, so the selection
 /// is drawn here rather than being a text selection.
 private final class MarkdownTextView: NSTextView {
+    var onPress: (() -> Void)?
+
     /// The selected block's paragraph range, or nil while editing. Nil is the normal state.
     private var selectedBlock: NSRange?
 
@@ -120,6 +122,7 @@ private final class MarkdownTextView: NSTextView {
     // MARK: - Checkboxes
 
     override func mouseDown(with event: NSEvent) {
+        onPress?()
         editBlock(at: selectedRange().location)  // a click is always editing
         let i = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
         let ns = string as NSString
@@ -197,6 +200,10 @@ private final class DragGlassView: NSVisualEffectView {
 /// the bounds for free, which matters because those bounds are exactly what hovering changes.
 private final class HoverPill: NSVisualEffectView {
     var onHover: ((Bool) -> Void)?
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .arrow)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -447,6 +454,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         super.init()
         glass.onDrag = { [weak self] origin in self?.dragTo(origin: origin) }
         glass.onPress = { [weak self] in self?.setPill(.closed) }  // the picker's way out
+        textView.onPress = { [weak self] in self?.setPill(.closed) }
         glass.contextMenu = { [weak self] in self?.buildMenu() }
         window.delegate = self
         textView.delegate = self
@@ -599,8 +607,9 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
             b.setAccessibilityLabel(face.rawValue)
             b.toolTip = face.rawValue
             b.face = face
-            b.narrow = face.dotImage(size: Self.dotSize)
-            b.wide = face.wordImage(height: Self.dotSize)
+            let borderWidth: CGFloat = face == family ? 2 : 1
+            b.narrow = face.dotImage(size: Self.dotSize, borderWidth: borderWidth)
+            b.wide = face.wordImage(height: Self.dotSize, borderWidth: borderWidth)
             b.image = b.narrow
             b.target = self
             b.action = #selector(fontChosen(_:))
@@ -609,6 +618,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
             b.onHover = { [weak self, weak b] inside in
                 guard let self, let b, b.expanded != inside else { return }
                 b.expanded = inside
+                renderFamily(inside ? face : family)
                 // Slower than the pill's own 0.14, and on a long tail rather than easeOut: this
                 // one you're meant to *read* — the word unrolling is the preview.
                 NSAnimationContext.runAnimationGroup { ctx in
@@ -631,7 +641,22 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
             b.imagePosition = .imageOnly
             b.setAccessibilityLabel(hex)
             b.hex = hex
-            b.image = Swatch.image(hex: hex, size: Self.dotSize, radius: Self.dotSize / 2)
+            b.image = Swatch.image(
+                hex: hex, size: Self.dotSize, radius: Self.dotSize / 2,
+                borderWidth: hex == colorHex ? 2 : 1)
+            b.wantsLayer = true
+            b.onHover = { [weak self, weak b] inside in
+                guard let self, let layer = b?.layer else { return }
+                let target = inside ? CATransform3DMakeScale(1.1, 1.1, 1) : CATransform3DIdentity
+                let animation = CABasicAnimation(keyPath: "transform")
+                animation.fromValue = layer.presentation()?.transform ?? layer.transform
+                animation.toValue = target
+                animation.duration = 0.14
+                animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                layer.add(animation, forKey: "hoverScale")
+                layer.transform = target
+                applyTint(Swatch.color(fromHex: inside ? hex : colorHex))
+            }
             b.target = self
             b.action = #selector(colorChosen(_:))
             return b
@@ -681,14 +706,20 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     /// round trip is the one `show` already does, and `--selftest` asserts it's lossless — mapping
     /// every run's font by hand would be the same result with more ways to get it wrong.
     private func applyFamily() {
-        MarkdownStyle.family = family
-        fontDot.image = family.dotImage(size: Self.dotSize)
-        guard let ts = textView.textStorage else { return }
         let caret = textView.selectedRange().location
+        renderFamily(family)
+        textView.editBlock(at: caret)  // also drops any block selection, whose rect just moved
+    }
+
+    /// Preview and commit share the exact same rendering path; only `family` itself is persisted,
+    /// so leaving a choice can restore it without ever scheduling a save.
+    private func renderFamily(_ face: NoteFont) {
+        MarkdownStyle.family = face
+        fontDot.image = face.dotImage(size: Self.dotSize)
+        guard let ts = textView.textStorage else { return }
         // No `textView.font =` here: that setter rewrites the font of *all* the text, wiping the
         // heading, bold and code runs the parse just laid down.
         ts.setAttributedString(MarkdownDocument.parse(MarkdownDocument.serialize(ts)))
-        textView.editBlock(at: caret)  // also drops any block selection, whose rect just moved
         textView.typingAttributes = MarkdownStyle.base
         MarkdownInput.syncTypingToBlock(textView)
     }

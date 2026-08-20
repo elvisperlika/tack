@@ -26,17 +26,23 @@ enum NoteFont: String, CaseIterable {
     }
 
     /// The note's font dot: a "T" set in this face, on the same circle the other dots are.
-    func dotImage(size: CGFloat) -> NSImage { capsule(height: size, text: "T", width: size) }
+    func dotImage(size: CGFloat, borderWidth: CGFloat = 1) -> NSImage {
+        capsule(height: size, text: "T", width: size, borderWidth: borderWidth)
+    }
 
     /// The same capsule, opened out to spell "Tack" — the dot's letter is already the word's
     /// first, so hovering a face finishes it rather than replacing it. Wide enough for the word,
     /// at the same point size, so the T doesn't change gauge on the way out.
-    func wordImage(height: CGFloat) -> NSImage { capsule(height: height, text: "Tack") }
+    func wordImage(height: CGFloat, borderWidth: CGFloat = 1) -> NSImage {
+        capsule(height: height, text: "Tack", borderWidth: borderWidth)
+    }
 
     /// A pill of `text` in this face, white enough to read on the note's glass. `width` is what
     /// the word needs unless the caller pins it — the dot pins it to `height`, so one letter is a
     /// circle rather than a stubby capsule the padding would round up to.
-    private func capsule(height: CGFloat, text: String, width: CGFloat? = nil) -> NSImage {
+    private func capsule(
+        height: CGFloat, text: String, width: CGFloat? = nil, borderWidth: CGFloat
+    ) -> NSImage {
         let label = NSAttributedString(
             string: text,
             attributes: [
@@ -51,6 +57,7 @@ enum NoteFont: String, CaseIterable {
         NSColor.white.withAlphaComponent(0.75).setFill()
         path.fill()
         NSColor.black.withAlphaComponent(0.15).setStroke()
+        path.lineWidth = borderWidth
         path.stroke()
         label.draw(at: NSPoint(x: (width - box.width) / 2, y: (height - box.height) / 2))
         img.unlockFocus()
