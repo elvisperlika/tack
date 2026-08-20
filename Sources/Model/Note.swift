@@ -8,6 +8,7 @@ struct Note: Codable, Equatable {
     var dx: Double
     var dy: Double
     var color: String? = nil
+    var font: String? = nil  // NoteFont.rawValue
     var w: Double? = nil
     var h: Double? = nil
 

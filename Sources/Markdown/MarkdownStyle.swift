@@ -7,12 +7,67 @@ extension NSAttributedString.Key {
     static let tackHeading = NSAttributedString.Key("tackHeading")  // value: Int (1...3)
 }
 
+/// The three typefaces Notion offers, and Tack with them. Per note, picked from the note's font
+/// dot; `mono` is also what code spans wear whatever the note is set to.
+enum NoteFont: String, CaseIterable {
+    case sans, serif, mono
+
+    func font(ofSize size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
+        let system = NSFont.systemFont(ofSize: size, weight: weight)
+        switch self {
+        case .sans: return system
+        case .mono: return NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+        case .serif:
+            // The system serif (New York), asked for by design rather than by name.
+            guard let d = system.fontDescriptor.withDesign(.serif), let f = NSFont(descriptor: d, size: size)
+            else { return system }
+            return f
+        }
+    }
+
+    /// The note's font dot: a "T" set in this face, on the same circle the other dots are.
+    func dotImage(size: CGFloat) -> NSImage { capsule(height: size, text: "T", width: size) }
+
+    /// The same capsule, opened out to spell "Tack" — the dot's letter is already the word's
+    /// first, so hovering a face finishes it rather than replacing it. Wide enough for the word,
+    /// at the same point size, so the T doesn't change gauge on the way out.
+    func wordImage(height: CGFloat) -> NSImage { capsule(height: height, text: "Tack") }
+
+    /// A pill of `text` in this face, white enough to read on the note's glass. `width` is what
+    /// the word needs unless the caller pins it — the dot pins it to `height`, so one letter is a
+    /// circle rather than a stubby capsule the padding would round up to.
+    private func capsule(height: CGFloat, text: String, width: CGFloat? = nil) -> NSImage {
+        let label = NSAttributedString(
+            string: text,
+            attributes: [
+                .font: font(ofSize: height - 5), .foregroundColor: NSColor.black.withAlphaComponent(0.65),
+            ])
+        let box = label.size()
+        let width = width ?? max(height, (box.width + height * 0.7).rounded())
+        let img = NSImage(size: NSSize(width: width, height: height))
+        img.lockFocus()
+        let rect = NSRect(x: 1, y: 1, width: width - 2, height: height - 2)
+        let path = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
+        NSColor.white.withAlphaComponent(0.75).setFill()
+        path.fill()
+        NSColor.black.withAlphaComponent(0.15).setStroke()
+        path.stroke()
+        label.draw(at: NSPoint(x: (width - box.width) / 2, y: (height - box.height) / 2))
+        img.unlockFocus()
+        return img
+    }
+}
+
 /// The one place a semantic mark becomes a font/colour, so a mark looks the same however it was
 /// produced — parsed from disk, typed via an input rule, or toggled with ⌘B. Bullets and todos are
 /// the exception: they keep literal `- ` / `[ ]` text, dimmed here by `styleLists`.
 enum MarkdownStyle {
-    static let baseFont = NSFont.systemFont(ofSize: 14)
-    static let codeFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    /// The typeface the shown note is set in. Global because one note shows at a time: the window
+    /// is reused, and `NoteWindow.show` sets this before parsing the text that will wear it.
+    static var family = NoteFont.sans
+
+    static var baseFont: NSFont { family.font(ofSize: 14) }
+    static var codeFont: NSFont { NoteFont.mono.font(ofSize: 13) }  // code is mono in every family
     static let textColor = NSColor.black
     /// Matches the trash button's tint. Black at low alpha reads as "faded" over any palette colour.
     static let dim = NSColor.black.withAlphaComponent(0.28)
@@ -34,7 +89,7 @@ enum MarkdownStyle {
 
     static func headingFont(_ level: Int) -> NSFont {
         let sizes: [CGFloat] = [18, 16, 15]
-        return NSFont.systemFont(ofSize: sizes[min(max(level, 1), 3) - 1], weight: .bold)
+        return family.font(ofSize: sizes[min(max(level, 1), 3) - 1], weight: .bold)
     }
 
     /// Font + strikethrough for a run carrying these marks. Composes: bold inside a heading stays

@@ -34,7 +34,8 @@ enum SelfTest {
         noteSizeIsOptional()
         urlNormalization()
         notePreferencesPalette()
-        paletteCycles()
+        fontFaces()
+        pillGeometry()
         print("✅ all self-tests passed")
     }
 
@@ -93,14 +94,6 @@ enum SelfTest {
         let last = only[0]
         prefs.removeColor(last)
         assert(prefs.palette == [last], "palette must keep at least one colour")
-    }
-
-    static func paletteCycles() {
-        let p = ["FFEB73", "FFB3BA", "AEC6FF"]
-        assert(Swatch.next(after: "FFEB73", in: p) == "FFB3BA", "cycle should advance")
-        assert(Swatch.next(after: "AEC6FF", in: p) == "FFEB73", "cycle should wrap")
-        assert(Swatch.next(after: "123456", in: p) == "FFEB73", "a colour off the palette restarts")
-        assert(Swatch.next(after: "123456", in: []) == "123456", "an empty palette keeps the colour")
     }
 
     static func centerNewNote() {
@@ -555,10 +548,63 @@ extension SelfTest {
             "# Title\nsome **bold** here\n- a\n- b",
             "",
         ]
-        for md in corpus {
-            let round = MarkdownDocument.serialize(MarkdownDocument.parse(md))
-            assert(round == md, "round-trip changed \(md.debugDescription) -> \(round.debugDescription)")
+        // Every face, because switching one re-parses the buffer through this round trip: what a
+        // note is set in must never reach the file.
+        for family in NoteFont.allCases {
+            MarkdownStyle.family = family
+            for md in corpus {
+                let round = MarkdownDocument.serialize(MarkdownDocument.parse(md))
+                assert(
+                    round == md,
+                    "round-trip in \(family) changed \(md.debugDescription) -> \(round.debugDescription)")
+            }
         }
+        MarkdownStyle.family = .sans
+    }
+
+    static func fontFaces() {
+        assert(NoteFont(rawValue: "wat") == nil, "an unknown face falls back to the default")
+        // Distinct faces, or the font picker would offer three identical choices.
+        let faces = Set(NoteFont.allCases.map { $0.font(ofSize: 14).fontName })
+        assert(faces.count == NoteFont.allCases.count, "the three faces should differ: \(faces)")
+        // Hovering a choice opens the dot into the whole word, so the word has to be the wider of
+        // the two — and the dot itself has to stay a circle, whatever the face measures.
+        for face in NoteFont.allCases {
+            let dot = face.dotImage(size: 16).size
+            let word = face.wordImage(height: 16).size
+            assert(dot.width == dot.height, "\(face)'s dot should stay a circle: \(dot)")
+            assert(word.width > dot.width, "\(face) should widen to spell Tack: \(word)")
+            assert(word.height == dot.height, "\(face) should only widen, not grow taller")
+        }
+    }
+
+    /// The pill's two shapes: a circle at rest, wider when hovered, and never wider than the
+    /// narrowest note it has to sit in.
+    static func pillGeometry() {
+        let closed = NoteWindow.pillClosedSize
+        assert(closed.width == closed.height, "closed, the pill should be a circle: \(closed)")
+        let open = NoteWindow.pillOpenSize
+        assert(open.width > closed.width, "hovering should widen the pill")
+        assert(open.height == closed.height, "only the width moves, so the corner radius holds")
+        assert(
+            open.width + NoteWindow.pillInset * 2 <= NotePreferences.shared.minSize.width,
+            "the open pill should fit the smallest note: \(open.width)")
+
+        // The picker's strip is cut to what the note can hold — inverting pillSize, so the two
+        // can't drift apart. One dot is the floor: a picker with nothing in it is a dead end.
+        assert(NoteWindow.pillDots(fitting: 10) == 1, "a hopeless width should still offer one dot")
+        for width in [100.0, 160.0, 220.0, 400.0] as [CGFloat] {
+            let n = NoteWindow.pillDots(fitting: width)
+            let fits = NoteWindow.pillSize(dots: n).width + NoteWindow.pillInset * 2 <= width
+            assert(fits, "\(n) dots should fit a \(width)pt note")
+            assert(
+                NoteWindow.pillSize(dots: n + 1).width + NoteWindow.pillInset * 2 > width,
+                "\(n) dots is short of what fits a \(width)pt note")
+        }
+        assert(
+            NoteWindow.pillDots(fitting: NotePreferences.shared.defaultSize.width)
+                >= NotePreferences.shared.palette.count,
+            "the preset palette should fit a default-sized note")
     }
 
     /// Blocks own their style: anywhere inside a heading block reports that heading, including its
@@ -619,6 +665,7 @@ extension SelfTest {
             return
         }
         assert(n.w == nil && n.h == nil, "a missing size should decode as nil, not zero: \(n)")
+        assert(n.font == nil, "a pre-font note should say nothing about its face: \(n)")
         assert(n.text == "hi" && n.dx == 12, "the rest of the note should survive: \(n)")
 
         let sized = Note(text: "hi", dx: 1, dy: 2, color: nil, w: 300, h: 240)

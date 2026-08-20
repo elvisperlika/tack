@@ -2,7 +2,7 @@ import AppKit
 
 /// "RRGGBB" hex <-> NSColor, kept pure so it can be asserted in --selftest.
 enum Swatch {
-    static let defaultHex = "FFEB73"  // sticky-note yellow
+    static let defaultHex = "FFFFFF"  // Notion white
 
     static func color(fromHex hex: String) -> NSColor {
         let h = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
@@ -19,13 +19,6 @@ enum Swatch {
             Int((c.redComponent * 255).rounded()),
             Int((c.greenComponent * 255).rounded()),
             Int((c.blueComponent * 255).rounded()))
-    }
-
-    /// The next colour after `hex`, wrapping. A colour that isn't in the palette (it was removed,
-    /// or came from the "+" panel) starts the cycle over.
-    static func next(after hex: String, in palette: [String]) -> String {
-        guard let i = palette.firstIndex(of: hex) else { return palette.first ?? hex }
-        return palette[(i + 1) % palette.count]
     }
 
     /// A rounded swatch of the colour, for menu items and the note's colour dot
@@ -45,8 +38,9 @@ enum Swatch {
     }
 }
 
-/// A palette swatch button that remembers which colour it is.
-private final class ColorSwatchButton: NSButton {
+/// A palette swatch button that remembers which colour it is. Shared by the menu's grid and
+/// the note pill's colour picker — both need the click to say *which* swatch it was.
+final class ColorSwatchButton: NSButton {
     var hex = ""
 }
 
