@@ -48,12 +48,15 @@ private final class MarkdownTextView: NSTextView {
         return true
     }
 
-    /// Canc removes the selected block and leaves you editing the end of the one above (the start
-    /// of the note, if it was the first). Through shouldChangeText, so ⌘Z brings it back.
+    /// Canc removes the selected block and stays in block mode, selecting the one above — or
+    /// whatever slides up into its place, when it was the first. Deleting is a block gesture, so
+    /// it shouldn't drop you back into the text. Through shouldChangeText, so ⌘Z brings it back.
     private func deleteBlock(_ block: NSRange) {
         guard let ts = textStorage else { return }
         let ns = string as NSString
-        let caret = Blocks.step(from: block, by: -1, in: ns).map { Blocks.contentEnd($0, in: ns) } ?? 0
+        // Measured before the text moves: the block above keeps its location whatever happens
+        // below it, and when there is no block above, what follows slides up to the start.
+        let landing = Blocks.step(from: block, by: -1, in: ns)?.location ?? 0
         var range = block
         // The last block has no newline of its own, so it takes the one that separates it from the
         // block above — otherwise deleting it would leave an empty block behind.
@@ -63,7 +66,7 @@ private final class MarkdownTextView: NSTextView {
         guard range.length > 0, shouldChangeText(in: range, replacementString: "") else { return }
         ts.deleteCharacters(in: range)
         didChangeText()
-        editBlock(at: caret)
+        selectBlock(Blocks.range(in: string as NSString, at: landing))
     }
 
     private func selectBlock(_ range: NSRange) {
