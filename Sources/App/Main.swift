@@ -7,7 +7,7 @@ enum Main {
             SelfTest.run()
             return
         }
-        let app = NSApplicatokion.shared
+        let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
         app.setActivationPolicy(.accessory)  // menu-bar agent, no dowhack icon

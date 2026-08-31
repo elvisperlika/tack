@@ -21,6 +21,7 @@ extension AppDelegate {
         return item
     }
 
+    /// Creates a status-bar menu item with its action, keyboard shortcut, and SF Symbol.
     private func makeItem(_ title: String, _ action: Selector, symbol: String, key: String) -> NSMenuItem {
         let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
         let img = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
@@ -29,6 +30,7 @@ extension AppDelegate {
         return i
     }
 
+    /// Shows the current container's note, or creates a centred empty note when none is saved.
     @objc func addNote() {
         guard let container = resolve(), let f = container.frame() else { return }
         let hit: (note: Note, level: Int)?
@@ -54,5 +56,6 @@ extension AppDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Terminates Tack through AppKit, which first asks the app delegate to flush pending saves.
     @objc func quit() { NSApp.terminate(nil) }
 }
