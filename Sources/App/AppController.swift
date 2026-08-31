@@ -124,8 +124,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             (level: $0, label: LevelName.label(level: $0, of: container.path.count))
         }
         note.setPinLevels(choices, current: level) { [weak self] newLevel in
-            guard let self else { return false }
-            let moved = persist {
+            guard let self = self else { return false }
+            let moved = self.persist {
                 guard let hit = try container.load() else { return }
                 try container.move(hit.note, from: hit.level, to: newLevel)
             }
