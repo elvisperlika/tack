@@ -3,15 +3,19 @@ import Foundation
 /// Inline styles stored in the rich-text buffer and restored during serialization.
 enum InlineStyle: String { case bold, italic, code, strike }
 
-/// Rich-text replacements for markdown list markers. Each occupies two UTF-16 units.
-enum ListGlyph {
-    static let bullet = "\u{2022} "  // "• "
-    static let todoOpen = "\u{2610} "  // "☐ "
-    static let todoDone = "\u{2611} "  // "☑ "
-    static let all = [bullet, todoOpen, todoDone]
+/// Semantic list markers rendered as attachments in the editor.
+enum ListGlyph: String {
+    case bullet, todoOpen, todoDone
+
     static let width = 2
 
-    static func leading(_ line: String) -> String? { all.first { line.hasPrefix($0) } }
+    var markdown: String {
+        switch self {
+        case .bullet: return "- "
+        case .todoOpen: return "- [ ] "
+        case .todoDone: return "- [x] "
+        }
+    }
 }
 
 /// Finds semantic spans in markdown without modifying the input.

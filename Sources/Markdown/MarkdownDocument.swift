@@ -9,21 +9,24 @@ enum MarkdownDocument {
     static func parse(_ markdown: String) -> NSAttributedString {
         let s = NSTextStorage(string: markdown, attributes: MarkdownStyle.base)
         // Record replacements after applying attributes because changing text shifts later ranges.
-        var edits: [(NSRange, String)] = []
+        var edits: [(NSRange, NSAttributedString)] = []
 
         for span in Markdown.spans(in: markdown) {
             switch span.style {
             case .inline(let style):
                 s.addAttribute(.tackInline, value: style.rawValue, range: span.content)
-                for m in span.markers { edits.append((m, "")) }
+                for m in span.markers { edits.append((m, NSAttributedString())) }
             case .heading(let level):
                 s.addAttribute(.tackHeading, value: level, range: span.content)
-                for m in span.markers { edits.append((m, "")) }
+                for m in span.markers { edits.append((m, NSAttributedString())) }
             case .bullet:
-                if let m = span.markers.first { edits.append((m, ListGlyph.bullet)) }
+                if let m = span.markers.first {
+                    edits.append((m, ListGlyph.bullet.marker(attributes: MarkdownStyle.base)))
+                }
             case .todo(let done):
                 if let m = span.markers.first {
-                    edits.append((m, done ? ListGlyph.todoDone : ListGlyph.todoOpen))
+                    let glyph = done ? ListGlyph.todoDone : ListGlyph.todoOpen
+                    edits.append((m, glyph.marker(attributes: MarkdownStyle.base)))
                 }
                 if done { strikeThrough(s, span.content) }
             }
@@ -31,7 +34,7 @@ enum MarkdownDocument {
 
         // Apply from the end so each replacement leaves earlier ranges valid.
         for (r, rep) in edits.sorted(by: { $0.0.location > $1.0.location }) {
-            s.replaceCharacters(in: r, with: NSAttributedString(string: rep, attributes: MarkdownStyle.base))
+            s.replaceCharacters(in: r, with: rep)
         }
 
         // Collect runs before mutating attributes; TextKit enumeration is not mutation-safe.
@@ -68,20 +71,14 @@ enum MarkdownDocument {
         return out.joined(separator: "\n")
     }
 
-    private static let listMarkdown: [(glyph: String, markdown: String)] = [
-        (ListGlyph.bullet, "- "), (ListGlyph.todoOpen, "- [ ] "), (ListGlyph.todoDone, "- [x] "),
-    ]
-
     private static func serializeLine(_ attr: NSAttributedString, range: NSRange) -> String {
         guard range.length > 0 else { return "" }
         let ns = attr.string as NSString
-        let lineText = ns.substring(with: range)
 
         var prefix = ""
         var content = range
-        if let (glyph, markdown) = listMarkdown.first(where: { lineText.hasPrefix($0.glyph) }) {
-            prefix = markdown
-            _ = glyph
+        if let glyph = ListGlyph.at(attr, range.location) {
+            prefix = glyph.markdown
             content = NSRange(location: range.location + ListGlyph.width, length: range.length - ListGlyph.width)
         } else if let level = attr.attribute(.tackHeading, at: range.location, effectiveRange: nil) as? Int {
             prefix = String(repeating: "#", count: level) + " "

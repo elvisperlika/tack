@@ -4,6 +4,74 @@ extension NSAttributedString.Key {
     /// Semantic marks retained after markdown syntax is removed from the editor buffer.
     static let tackInline = NSAttributedString.Key("tackInline")  // value: InlineStyle.rawValue (String)
     static let tackHeading = NSAttributedString.Key("tackHeading")  // value: Int (1...3)
+    static let tackList = NSAttributedString.Key("tackList")  // value: ListGlyph.rawValue (String)
+}
+
+extension ListGlyph {
+    private static let markerSize: CGFloat = 14
+
+    static func at(_ text: NSAttributedString, _ index: Int) -> ListGlyph? {
+        guard index >= 0, index < text.length else { return nil }
+        return (text.attribute(.tackList, at: index, effectiveRange: nil) as? String)
+            .flatMap(ListGlyph.init)
+    }
+
+    func marker(attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
+        let value = NSMutableAttributedString(attributedString: symbol(attributes: attributes))
+        value.append(NSAttributedString(string: " ", attributes: attributes))
+        return value
+    }
+
+    func symbol(attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
+        let image = markerImage()
+        image.accessibilityDescription = accessibilityLabel
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        attachment.bounds = NSRect(x: 0, y: -2, width: Self.markerSize, height: Self.markerSize)
+
+        let value = NSMutableAttributedString(attachment: attachment)
+        value.addAttributes(attributes, range: NSRange(location: 0, length: value.length))
+        value.addAttribute(.tackList, value: rawValue, range: NSRange(location: 0, length: value.length))
+        return value
+    }
+
+    private var accessibilityLabel: String {
+        switch self {
+        case .bullet: return "Bullet"
+        case .todoOpen: return "Unchecked"
+        case .todoDone: return "Checked"
+        }
+    }
+
+    private func markerImage() -> NSImage {
+        NSImage(size: NSSize(width: Self.markerSize, height: Self.markerSize), flipped: false) { rect in
+            switch self {
+            case .bullet:
+                NSColor.black.withAlphaComponent(0.68).setFill()
+                NSBezierPath(ovalIn: rect.insetBy(dx: 4.75, dy: 4.75)).fill()
+            case .todoOpen:
+                let box = NSBezierPath(roundedRect: rect.insetBy(dx: 1.3, dy: 1.3), xRadius: 2.4, yRadius: 2.4)
+                box.lineWidth = 1.3
+                NSColor.black.withAlphaComponent(0.48).setStroke()
+                box.stroke()
+            case .todoDone:
+                let box = NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 2.6, yRadius: 2.6)
+                NSColor(srgbRed: 35 / 255, green: 131 / 255, blue: 226 / 255, alpha: 1).setFill()
+                box.fill()
+
+                let check = NSBezierPath()
+                check.move(to: NSPoint(x: 3.6, y: 7.1))
+                check.line(to: NSPoint(x: 5.9, y: 4.9))
+                check.line(to: NSPoint(x: 10.4, y: 9.4))
+                check.lineWidth = 1.55
+                check.lineCapStyle = .round
+                check.lineJoinStyle = .round
+                NSColor.white.setStroke()
+                check.stroke()
+            }
+            return true
+        }
+    }
 }
 
 /// The note typefaces; code spans always use `mono`.

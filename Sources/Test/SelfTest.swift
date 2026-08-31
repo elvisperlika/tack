@@ -26,6 +26,7 @@ enum SelfTest {
         debouncerCollapses()
         markdownSpans()
         markdownParse()
+        markdownListEditing()
         markdownRoundTrip()
         markdownInlineClosing()
         blockStyleAtCaret()
@@ -526,20 +527,44 @@ extension SelfTest {
         assert(hb.string == "Big", "both markers gone: \(hb.string.debugDescription)")
         assert(font(hb, 0)?.pointSize == 18 && isBold(font(hb, 0)), "heading-sized and bold")
 
-        // Bullets/todos are consumed too: the `- `/`[ ]` markdown becomes a rendered glyph, and a
-        // ticked todo strikes its content. Content starts at index 2 (glyph + space).
+        // List syntax becomes a semantic image attachment plus a space, so content starts at 2.
         let bullet = MarkdownDocument.parse("- milk")
-        assert(bullet.string == "\u{2022} milk", "bullet becomes a • glyph: \(bullet.string.debugDescription)")
+        assert(bullet.string == "\u{FFFC} milk", "bullet should become an attachment")
+        assert(ListGlyph.at(bullet, 0) == .bullet, "bullet attachment should retain its meaning")
 
         let open = MarkdownDocument.parse("- [ ] task")
-        assert(open.string == "\u{2610} task", "open todo becomes ☐: \(open.string.debugDescription)")
+        assert(open.string == "\u{FFFC} task", "open todo should become an attachment")
+        assert(ListGlyph.at(open, 0) == .todoOpen, "open todo attachment should retain its meaning")
         assert(open.attribute(.strikethroughStyle, at: 2, effectiveRange: nil) == nil, "open todo not struck")
 
         let done = MarkdownDocument.parse("- [x] done")
-        assert(done.string == "\u{2611} done", "done todo becomes ☑: \(done.string.debugDescription)")
+        assert(done.string == "\u{FFFC} done", "done todo should become an attachment")
+        assert(ListGlyph.at(done, 0) == .todoDone, "done todo attachment should retain its meaning")
         assert(
             done.attribute(.strikethroughStyle, at: 2, effectiveRange: nil) != nil,
             "a done todo strikes its content")
+        let attachment = done.attribute(.attachment, at: 0, effectiveRange: nil) as? NSTextAttachment
+        assert(attachment?.image?.size == NSSize(width: 14, height: 14), "marker image should be crisp at 14pt")
+    }
+
+    static func markdownListEditing() {
+        let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        tv.string = "- "
+        tv.setSelectedRange(NSRange(location: 2, length: 0))
+        assert(MarkdownInput.listRule(tv), "typing '- ' should create a bullet")
+        guard let ts = tv.textStorage else {
+            assert(false, "text view needs storage")
+            return
+        }
+        assert(ListGlyph.at(ts, 0) == .bullet, "live bullet should be an attachment")
+
+        ts.append(NSAttributedString(string: "milk", attributes: MarkdownStyle.base))
+        tv.setSelectedRange(NSRange(location: ts.length, length: 0))
+        assert(
+            MarkdownInput.handle(#selector(NSStandardKeyBindingResponding.insertNewline(_:)), tv),
+            "Enter should continue a bullet list")
+        assert(ListGlyph.at(ts, 7) == .bullet, "continued list should use a bullet attachment")
+        assert(MarkdownDocument.serialize(ts) == "- milk\n- ", "live bullet list should serialize")
     }
 
     static func markdownRoundTrip() {

@@ -106,7 +106,7 @@ enum MarkdownInput {
         guard (2...4).contains(prefixLen) else { return false }  // "- " .. "[ ] "
         let prefix = ns.substring(with: NSRange(location: line.location, length: prefixLen))
 
-        let glyph: String
+        let glyph: ListGlyph
         if bulletPrefix.firstMatch(in: prefix, range: whole(prefix)) != nil {
             glyph = ListGlyph.bullet
         } else if let m = todoPrefix.firstMatch(in: prefix, range: whole(prefix)) {
@@ -117,8 +117,9 @@ enum MarkdownInput {
         }
 
         let del = NSRange(location: line.location, length: prefixLen)
-        guard tv.shouldChangeText(in: del, replacementString: glyph) else { return false }
-        ts.replaceCharacters(in: del, with: NSAttributedString(string: glyph, attributes: MarkdownStyle.base))
+        let marker = glyph.marker(attributes: MarkdownStyle.base)
+        guard tv.shouldChangeText(in: del, replacementString: marker.string) else { return false }
+        ts.replaceCharacters(in: del, with: marker)
         tv.didChangeText()
         tv.setSelectedRange(NSRange(location: line.location + ListGlyph.width, length: 0))
         tv.typingAttributes = MarkdownStyle.base
@@ -200,16 +201,18 @@ enum MarkdownInput {
         let sel = tv.selectedRange()
         let ns = ts.string as NSString
         let line = ns.lineRange(for: NSRange(location: sel.location, length: 0))
-        let lineText = ns.substring(with: line)
 
-        if let glyph = ListGlyph.leading(lineText) {
+        if let glyph = ListGlyph.at(ts, line.location) {
+            let lineText = ns.substring(with: line)
             let contentLen = line.length - ListGlyph.width - (lineText.hasSuffix("\n") ? 1 : 0)
             if contentLen <= 0 {  // empty item: Enter drops the marker and leaves a body line
                 return replace(tv, NSRange(location: line.location, length: ListGlyph.width), "", caret: line.location)
             }
             // Continue the list; a todo continues as an open box, not a copy of a ticked one.
-            let next = (glyph == ListGlyph.bullet) ? ListGlyph.bullet : ListGlyph.todoOpen
-            return replace(tv, sel, "\n" + next, caret: sel.location + ("\n" + next as NSString).length)
+            let next = glyph == .bullet ? ListGlyph.bullet : ListGlyph.todoOpen
+            let insertion = NSMutableAttributedString(string: "\n", attributes: MarkdownStyle.base)
+            insertion.append(next.marker(attributes: MarkdownStyle.base))
+            return replace(tv, sel, insertion, caret: sel.location + insertion.length)
         }
         return replace(tv, sel, "\n", caret: sel.location + 1)
     }
@@ -224,7 +227,9 @@ enum MarkdownInput {
         let line = ns.lineRange(for: NSRange(location: sel.location, length: 0))
         let lineText = ns.substring(with: line)
 
-        if ListGlyph.leading(lineText) != nil, sel.location == line.location + ListGlyph.width {
+        if ListGlyph.at(ts, line.location) != nil,
+            sel.location == line.location + ListGlyph.width
+        {
             return replace(tv, NSRange(location: line.location, length: ListGlyph.width), "", caret: line.location)
         }
         // headingLevel, not a bare attribute read: an empty last block starts at the very end of
@@ -245,9 +250,17 @@ enum MarkdownInput {
     /// typing to body — the shared spine of the Enter/Backspace list edits.
     @discardableResult
     private static func replace(_ tv: NSTextView, _ range: NSRange, _ text: String, caret: Int) -> Bool {
+        replace(
+            tv, range, NSAttributedString(string: text, attributes: MarkdownStyle.base), caret: caret)
+    }
+
+    @discardableResult
+    private static func replace(
+        _ tv: NSTextView, _ range: NSRange, _ text: NSAttributedString, caret: Int
+    ) -> Bool {
         guard let ts = tv.textStorage else { return false }
-        guard tv.shouldChangeText(in: range, replacementString: text) else { return true }
-        ts.replaceCharacters(in: range, with: NSAttributedString(string: text, attributes: MarkdownStyle.base))
+        guard tv.shouldChangeText(in: range, replacementString: text.string) else { return true }
+        ts.replaceCharacters(in: range, with: text)
         tv.didChangeText()
         // Body first, then move: the selection change runs `syncTypingToBlock`, so an Enter that
         // *splits* a heading keeps typing in that heading while one that opens an empty block below

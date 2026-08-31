@@ -125,22 +125,26 @@ private final class MarkdownTextView: NSTextView {
         onPress?()
         editBlock(at: selectedRange().location)  // a click is always editing
         let i = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
-        let ns = string as NSString
-        // A click on the glyph can resolve to either side of it, so check both insertion sides.
-        for cand in [i, i - 1] where cand >= 0 && cand < ns.length {
-            let ch = ns.substring(with: NSRange(location: cand, length: 1))
-            if ch == "\u{2610}" || ch == "\u{2611}" { toggleCheckbox(at: cand); return }
+        guard let ts = textStorage else { return }
+        // A click on the attachment can resolve to either insertion side.
+        for cand in [i, i - 1] where cand >= 0 && cand < ts.length {
+            if let glyph = ListGlyph.at(ts, cand), glyph != .bullet {
+                toggleCheckbox(at: cand, glyph: glyph)
+                return
+            }
         }
         super.mouseDown(with: event)
     }
 
-    private func toggleCheckbox(at i: Int) {
+    private func toggleCheckbox(at i: Int, glyph: ListGlyph) {
         guard let ts = textStorage else { return }
-        let becomingDone = (ts.string as NSString).substring(with: NSRange(location: i, length: 1)) == "\u{2610}"
+        let becomingDone = glyph == .todoOpen
+        let replacement = (becomingDone ? ListGlyph.todoDone : .todoOpen)
+            .symbol(attributes: MarkdownStyle.base)
         let box = NSRange(location: i, length: 1)
         // shouldChangeText/didChangeText registers the undo *and* posts the change notification.
-        guard shouldChangeText(in: box, replacementString: becomingDone ? "\u{2611}" : "\u{2610}") else { return }
-        ts.replaceCharacters(in: box, with: becomingDone ? "\u{2611}" : "\u{2610}")
+        guard shouldChangeText(in: box, replacementString: replacement.string) else { return }
+        ts.replaceCharacters(in: box, with: replacement)
         didChangeText()
 
         // Strike / un-strike the item's content to match the new state.
