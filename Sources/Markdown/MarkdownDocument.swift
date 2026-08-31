@@ -1,24 +1,20 @@
 import AppKit
 
-/// The storage boundary. On disk a note is markdown; in the editor it is rich text with no
-/// markdown markup: inline/heading markers become attributes, and list markers become rendered
-/// `•` / `☐` / `☑` glyphs (`ListGlyph`). `parse` strips markup out, `serialize` puts it back.
-///
-/// Pure — no window — so `--selftest` asserts `serialize(parse(md)) == md` over a corpus.
+/// Converts between stored markdown and the editor's attributed text.
+/// Syntax becomes semantic attributes or list glyphs during parsing and is restored on save.
 enum MarkdownDocument {
 
     // MARK: - Markdown -> attributed (load)
 
     static func parse(_ markdown: String) -> NSAttributedString {
         let s = NSTextStorage(string: markdown, attributes: MarkdownStyle.base)
-        // Each markdown marker becomes a replacement: "" removes it (inline/heading), or a list
-        // glyph takes its place. Applied after the semantic marks are set, so content rides along.
+        // Record replacements after applying attributes because changing text shifts later ranges.
         var edits: [(NSRange, String)] = []
 
         for span in Markdown.spans(in: markdown) {
             switch span.style {
-            case .bold, .italic, .code, .strike:
-                s.addAttribute(.tackInline, value: inlineRaw(span.style), range: span.content)
+            case .inline(let style):
+                s.addAttribute(.tackInline, value: style.rawValue, range: span.content)
                 for m in span.markers { edits.append((m, "")) }
             case .heading(let level):
                 s.addAttribute(.tackHeading, value: level, range: span.content)
@@ -33,13 +29,12 @@ enum MarkdownDocument {
             }
         }
 
-        // Descending, so replacing a later marker never shifts an earlier one still to be edited.
+        // Apply from the end so each replacement leaves earlier ranges valid.
         for (r, rep) in edits.sorted(by: { $0.0.location > $1.0.location }) {
             s.replaceCharacters(in: r, with: NSAttributedString(string: rep, attributes: MarkdownStyle.base))
         }
 
-        // Derive appearance from the marks now on the (edited) string. Collect first: mutating
-        // attributes while enumerating them is asking for trouble.
+        // Collect runs before mutating attributes; TextKit enumeration is not mutation-safe.
         var runs: [(NSRange, InlineStyle?, Int?)] = []
         s.enumerateAttributes(in: NSRange(location: 0, length: s.length)) { attrs, range, _ in
             let inline = (attrs[.tackInline] as? String).flatMap(InlineStyle.init)
@@ -52,7 +47,7 @@ enum MarkdownDocument {
         return s
     }
 
-    /// Strike + dim a ticked todo's content. Public so the click-to-toggle can reuse it.
+    /// Shared by initial parsing and interactive checkbox toggling.
     static func strikeThrough(_ ts: NSTextStorage, _ range: NSRange) {
         ts.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
         ts.addAttribute(.foregroundColor, value: MarkdownStyle.dim, range: range)
@@ -61,15 +56,14 @@ enum MarkdownDocument {
     // MARK: - Attributed -> markdown (save)
 
     static func serialize(_ attr: NSAttributedString) -> String {
-        // components(separatedBy:) keeps empty lines and any trailing newline, so joining back is
-        // lossless — line ranges are tracked by hand alongside.
+        // components(separatedBy:) preserves empty lines and a trailing newline when rejoined.
         let lines = attr.string.components(separatedBy: "\n")
         var offset = 0
         var out: [String] = []
         for line in lines {
             let len = (line as NSString).length
             out.append(serializeLine(attr, range: NSRange(location: offset, length: len)))
-            offset += len + 1  // + the '\n' that components() dropped
+            offset += len + 1  // account for the removed newline
         }
         return out.joined(separator: "\n")
     }
@@ -83,7 +77,6 @@ enum MarkdownDocument {
         let ns = attr.string as NSString
         let lineText = ns.substring(with: range)
 
-        // A line is a list item, a heading, or body — pick the prefix and the content range.
         var prefix = ""
         var content = range
         if let (glyph, markdown) = listMarkdown.first(where: { lineText.hasPrefix($0.glyph) }) {
@@ -94,8 +87,7 @@ enum MarkdownDocument {
             prefix = String(repeating: "#", count: level) + " "
         }
 
-        // Re-wrap inline runs; the list glyph and any plain text carry no .tackInline, so they pass
-        // through — except the glyph, which is excluded from `content` above.
+        // Re-wrap marked runs; unmarked text passes through unchanged.
         var body = ""
         attr.enumerateAttribute(.tackInline, in: content) { value, r, _ in
             let text = ns.substring(with: r)
@@ -114,16 +106,6 @@ enum MarkdownDocument {
         case .italic: return "*\(text)*"
         case .code: return "`\(text)`"
         case .strike: return "~~\(text)~~"
-        }
-    }
-
-    private static func inlineRaw(_ style: Markdown.Style) -> String {
-        switch style {
-        case .bold: return InlineStyle.bold.rawValue
-        case .italic: return InlineStyle.italic.rawValue
-        case .code: return InlineStyle.code.rawValue
-        case .strike: return InlineStyle.strike.rawValue
-        default: return InlineStyle.bold.rawValue  // unreachable: callers pass inline styles only
         }
     }
 }

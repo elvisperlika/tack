@@ -443,20 +443,24 @@ extension SelfTest {
 
         // Content excludes the markers, and both marker runs are reported so they can be dimmed.
         let b = Markdown.spans(in: "a **milk** b")
-        assert(b.count == 1 && b[0].style == .bold, "one bold span expected: \(b)")
+        assert(b.count == 1 && b[0].style == .inline(.bold), "one bold span expected: \(b)")
         assert(b[0].content == NSRange(location: 4, length: 4), "content should be 'milk': \(b[0])")
         assert(
             b[0].markers == [NSRange(location: 2, length: 2), NSRange(location: 8, length: 2)],
             "markers should be the two '**': \(b[0])")
 
         // The lookaround guard: the inner '*' of '**' must not read as italic.
-        assert(styles("**bold**") == [.bold], "italic fired inside bold: \(styles("**bold**"))")
-        assert(styles("*it*") == [.italic], "italic")
-        assert(styles("_it_") == [.italic], "underscore italic")
+        assert(
+            styles("**bold**") == [.inline(.bold)],
+            "italic fired inside bold: \(styles("**bold**"))")
+        assert(styles("*it*") == [.inline(.italic)], "italic")
+        assert(styles("_it_") == [.inline(.italic)], "underscore italic")
         assert(styles("snake_case_here").isEmpty, "underscores inside a word are not italic")
 
         // First claim wins, and code claims first.
-        assert(styles("`**x**`") == [.code], "code should claim its span: \(styles("`**x**`"))")
+        assert(
+            styles("`**x**`") == [.inline(.code)],
+            "code should claim its span: \(styles("`**x**`"))")
 
         let h = Markdown.spans(in: "## Shopping")
         assert(h.count == 1 && h[0].style == .heading(2), "should be an h2: \(h)")
@@ -471,12 +475,14 @@ extension SelfTest {
         assert(styles("- [X] pay rent") == [.todo(done: true)], "uppercase X ticks too")
         assert(styles("- milk") == [.bullet], "plain bullet")
 
-        assert(styles("~~gone~~") == [.strike], "strike")
+        assert(styles("~~gone~~") == [.inline(.strike)], "strike")
         assert(styles("just text").isEmpty, "plain text has no spans — the no-migration case")
         assert(styles("**foo").isEmpty, "unterminated bold is not a span")
 
         // Line rules are reported before inline ones, so styling composes rather than flattens.
-        assert(styles("- **milk** 2L") == [.bullet, .bold], "bullet then bold: \(styles("- **milk** 2L"))")
+        assert(
+            styles("- **milk** 2L") == [.bullet, .inline(.bold)],
+            "bullet then bold: \(styles("- **milk** 2L"))")
         assert(styles("# Shopping\n- milk") == [.heading(1), .bullet], "line rules match per line")
     }
 
