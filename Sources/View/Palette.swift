@@ -41,25 +41,6 @@ enum Swatch {
     }
 }
 
-/// A palette swatch button that remembers which colour it is. Shared by the menu's grid and
-/// the note pill's colour picker — both need the click to say *which* swatch it was.
-final class ColorSwatchButton: NSButton {
-    var hex = ""
-    var onHover: ((Bool) -> Void)?
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(
-            NSTrackingArea(
-                rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                owner: self))
-    }
-
-    override func mouseEntered(with event: NSEvent) { onHover?(true) }
-    override func mouseExited(with event: NSEvent) { onHover?(false) }
-}
-
 /// The colour-picking UI: the swatch grid (each swatch wears a tiny × to delete it) and the
 /// "+" system-panel flow.
 /// Its one job is reporting the chosen colour through `onPick` — it never touches the note, so
