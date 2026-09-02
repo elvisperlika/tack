@@ -6,23 +6,21 @@ private final class KeyableWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
-/// One reusable floating post-it. Follows the tracked window by keeping a fixed offset (dx, dy)
-/// from its top-left; dragging the note updates and persists that offset.
-final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
+/// One reusable floating post-it, and the assembler for the four parts that make one up: where
+/// it sits (`NoteAnchor`), what it says (`NoteEditor`), how it looks (`NoteStyler`) and how you
+/// change any of that (`NotePill`). Each part owns its own slice of a `Note`, so only this class
+/// can build a whole one — which is why saving lives here and nowhere else.
+///
+/// What is left of its own: the window and its glass card, showing and hiding, and the
+/// right-click menu.
+final class NoteWindow: NSObject, NSWindowDelegate {
     private let window: KeyableWindow
-    private let tintView: NSView  // the palette colour, sheer, over the glass
-    private let textView: MarkdownTextView
-    private let fontDot: NSButton  // wears an "A" in the note's face; opens the face picker
-    private let colorDot: NSButton  // wears the note's colour; opens the palette picker
-    private let deleteDot: NSButton  // red: deletes the note
-    private let pill: HoverPill  // holds the three dots; a bare dot until hovered
-    /// What the pill is showing. `.font` / `.color` are the picker: the pill widens and the three
-    /// dots give way to the choices, which is why this is a mode and not a bool.
-    private enum PillMode { case closed, open, font, color }
-    private var pillMode = PillMode.closed
-    private var choiceDots: [NSButton] = []  // the picker's dots, built per opening
-    private var reforming = false  // guards the input rules' own edits from re-entering textDidChange
-    private lazy var paletteMenu = PaletteMenu { [weak self] in self?.apply(color: $0) }
+    /// Where the note sits: the offset it keeps from the tracked window, and the size it wants.
+    private let anchor: NoteAnchor
+    private let editor: NoteEditor  // the text, its markdown rules, and the only writer to it
+    private let styler: NoteStyler  // the note's colour and typeface, and the tint that shows one
+    private let pill: NotePill  // the control cluster in the card's top-right corner
+    private lazy var paletteMenu = PaletteMenu { [weak self] in self?.choose(color: $0, commit: true) }
 
     /// The pin levels the note can move between, pushed by the controller so NoteWindow stays
     /// ignorant of Container — the same split as the colour menu, which owns *how* one is chosen
@@ -35,18 +33,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     /// Called after the user deletes the note (so the app can stop tracking it).
     var onDelete: (() -> Void)?
 
-    private var colorHex = NotePreferences.shared.defaultColorHex
-    private var family = NoteFont.sans
     private var saveHandler: (Note) -> Bool = { _ in true }  // persists or reports failure
-    /// The tracked window, top-left screen coords. One value, because its origin and size only
-    /// ever change together — three loose fields drifting apart was a bug waiting to happen.
-    private var tracked = CGRect.zero
-    private var dx = 20.0
-    private var dy = 40.0
-    /// The size the note wants to be. The shown size is this capped to the tracked window, so a
-    /// note never spills outside the window it's pinned to — and restores when the window grows.
-    private var desired = NotePreferences.shared.defaultSize
-    private var isProgrammaticMove = false
     private var active = false  // current folder has a note to show
     private var occluded = false  // the note's spot on the Finder window is covered
     private var shown = false  // what the last pop animated toward (the window stays visible while popping out)
@@ -65,72 +52,6 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
         image.resizingMode = .stretch
         return image
-    }
-
-    // Bigger dots in the same pill: the padding and the gap give up what the dots take, so the
-    // capsule stays 20pt tall and ~60 wide open.
-    private static let dotSize: CGFloat = 16
-    private static let dotGap: CGFloat = 4
-    private static let pillPad = NSSize(width: 5, height: 3)
-    private static let deleteHex = "FF5F57"  // the red of a window's close button
-
-    /// Where the nth dot sits inside the pill. One formula, so `pillSize` and every dot agree.
-    private static func dotFrame(index: Int) -> NSRect {
-        NSRect(
-            x: pillPad.width + CGFloat(index) * (dotSize + dotGap), y: pillPad.height,
-            width: dotSize, height: dotSize)
-    }
-
-    private static func dotButton(index: Int, name: String) -> NSButton {
-        let b = NSButton(frame: dotFrame(index: index))
-        b.isBordered = false
-        b.imagePosition = .imageOnly
-        b.setAccessibilityLabel(name)
-        b.toolTip = name
-        return b
-    }
-
-    static let pillInset: CGFloat = 6  // gap between the pill and the card's top-right corner
-
-    /// Closed, the pill is a circle — same height, so the `height / 2` corner radius rounds it
-    /// the whole way with no second radius to keep in sync.
-    static var pillClosedSize: NSSize { NSSize(width: pillOpenSize.height, height: pillOpenSize.height) }
-    static var pillOpenSize: NSSize { pillSize(dots: 3) }
-
-    /// One control cluster instead of three things scattered over the card, parked in the
-    /// top-right corner. At rest it's a bare glass dot; the cursor reaching it opens it leftwards
-    /// (`setPill`) to uncover the three dots. It *floats* over the text either way, the way iOS's
-    /// new bars do — the note's own words blur under it, so nothing is carved out for it.
-    private static func pillView(width: CGFloat, height: CGFloat) -> HoverPill {
-        let size = pillClosedSize
-        let v = HoverPill(
-            frame: NSRect(
-                x: width - pillInset - size.width, y: height - pillInset - size.height,
-                width: size.width, height: size.height))
-        v.material = .popover
-        v.blendingMode = .withinWindow  // blur the note's own text under it, not the desktop
-        v.state = .active
-        v.appearance = NSAppearance(named: .aqua)
-        v.wantsLayer = true
-        v.layer?.cornerRadius = size.height / 2
-        v.layer?.masksToBounds = true  // rounds the blur; within-window blending is layer-drawn
-        v.layer?.borderColor = NSColor.black.withAlphaComponent(0.08).cgColor
-        v.layer?.borderWidth = 1
-        v.autoresizingMask = [.minXMargin, .minYMargin]  // top-right corner, whatever the size
-        return v
-    }
-
-    /// How many dots a note `width` wide can hold — `pillSize` inverted, so the two can't drift.
-    /// Never below 1: a picker with nothing in it would be a dead end.
-    static func pillDots(fitting width: CGFloat) -> Int {
-        let room = width - pillInset * 2 - pillPad.width * 2 + dotGap
-        return max(1, Int(room / (dotSize + dotGap)))
-    }
-
-    static func pillSize(dots: Int) -> NSSize {
-        NSSize(
-            width: CGFloat(dots) * dotSize + CGFloat(dots - 1) * dotGap + pillPad.width * 2,
-            height: dotSize + pillPad.height * 2)
     }
 
     override init() {
@@ -152,6 +73,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         // ponytail: can't query a window's Space via public API, so the note binds to the
         // desktop that's active when its folder becomes frontmost, and stays there.
         window.collectionBehavior = [.moveToActiveSpace]
+        anchor = NoteAnchor(window: window)
 
         // Rounded glass card: a blur of whatever sits behind the note, with the palette colour
         // as a sheer tint over it. The bare tint is the drag area.
@@ -168,81 +90,35 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         glass.layer?.masksToBounds = true
 
         // The palette colour lives here rather than on the glass: NSVisualEffectView owns its
-        // own layer's drawing, so a tint of our own needs a view of its own.
-        tintView = NSView(frame: glass.bounds)
-        tintView.autoresizingMask = [.width, .height]
-        tintView.wantsLayer = true
-        glass.addSubview(tintView)
+        // own layer's drawing, so a tint of our own needs a view of its own. The styler is the
+        // only thing that paints it, so it's the only thing that keeps it.
+        let tint = NSView(frame: glass.bounds)
+        tint.autoresizingMask = [.width, .height]
+        tint.wantsLayer = true
+        glass.addSubview(tint)
+        styler = NoteStyler(tintView: tint)
 
         // Editable text: the full card below the drag strip.
         // ponytail: no inset for the pill — closed it's a dot in a corner and the text is meant to
         // blur under it; reserving a line's worth of space for it on every note costs more.
-        let scroll = NSScrollView(frame: NSRect(x: 4, y: 4, width: w - 8, height: h - strip - 4))
-        scroll.drawsBackground = false
-        scroll.hasVerticalScroller = false
-        scroll.autoresizingMask = [.width, .height]
-        scroll.automaticallyAdjustsContentInsets = false
-        textView = MarkdownTextView(frame: scroll.bounds)
-        _ = textView.layoutManager  // block mode measures line fragments: take TextKit 1 now, not mid-draw
-        textView.drawsBackground = false
-        textView.font = MarkdownStyle.baseFont
-        textView.textColor = .black
-        textView.isRichText = true  // emphasis rides as attributes; markdown lives only on disk
-        textView.isAutomaticTextReplacementEnabled = false  // no smart quotes/dashes mangling markdown
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.allowsUndo = true  // off by default — without it ⌘Z reaches an empty undo stack
-        textView.textContainerInset = NSSize(width: 6, height: 6)
-        textView.autoresizingMask = [.width]
-        textView.isVerticallyResizable = true
-        textView.textContainer?.widthTracksTextView = true
-        scroll.documentView = textView
-        glass.addSubview(scroll)
+        editor = NoteEditor(frame: NSRect(x: 4, y: 4, width: w - 8, height: h - strip - 4))
+        glass.addSubview(editor.view)
 
-        // The three dots, left to right: the note's typeface, its colour, and red for delete. One
-        // click is the whole gesture for each; the rarer choices (editing the palette, the pin
-        // level) are a right-click on the card. Hidden until the pill opens — the clip only hides
-        // them from view, and a dot outside the closed pill would still take clicks.
-        pill = Self.pillView(width: w, height: h)
-        fontDot = Self.dotButton(index: 0, name: "Font")
-        colorDot = Self.dotButton(index: 1, name: "Colour")
-        deleteDot = Self.dotButton(index: 2, name: "Delete note")
-        deleteDot.image = Swatch.image(hex: Self.deleteHex, size: Self.dotSize, radius: Self.dotSize / 2)
-        for dot in [fontDot, colorDot, deleteDot] {
-            dot.isHidden = true
-            pill.addSubview(dot)
-        }
-        glass.addSubview(pill)
+        pill = NotePill(cardWidth: w, cardHeight: h, styler: styler)
+        glass.addSubview(pill.view)
 
         window.contentView = glass
         super.init()
-        glass.onDrag = { [weak self] origin in self?.dragTo(origin: origin) }
-        glass.onPress = { [weak self] in self?.setPill(.closed) }  // the picker's way out
-        textView.onPress = { [weak self] in self?.setPill(.closed) }
+        anchor.onChange = { [weak self] in self?.scheduleSave() }
+        glass.onDrag = { [weak self] origin in self?.anchor.dragTo(origin: origin) }
+        glass.onPress = { [weak self] in self?.pill.close() }  // the picker's way out
+        editor.onPress = { [weak self] in self?.pill.close() }
+        editor.onEdit = { [weak self] in self?.scheduleSave() }
         glass.contextMenu = { [weak self] in self?.buildMenu() }
         window.delegate = self
-        textView.delegate = self
-        fontDot.target = self
-        fontDot.action = #selector(pickFont)
-        colorDot.target = self
-        colorDot.action = #selector(pickColor)
-        deleteDot.target = self
-        deleteDot.action = #selector(deleteTapped)
-        // Leaving cancels whatever picker is open. Arriving only opens the pill *from rest*: every
-        // frame change rebuilds the tracking area, which re-posts mouseEntered with the cursor
-        // already inside — unguarded, that snapped an open picker straight back to the three dots
-        // (and only for the colours, whose strip is the one that changes the pill's width).
-        pill.onHover = { [weak self] inside in
-            guard let self else { return }
-            if !inside {
-                // Only the bare three dots follow the cursor away. A picker is a question already
-                // asked: it stays up until it's answered, or until a click on the card drops it.
-                if pillMode == .open { setPill(.closed) }
-            } else if pillMode == .closed {
-                setPill(.open)
-            }
-        }
-        applyTint(Swatch.color(fromHex: colorHex))  // one source of truth for the default colour
-        fontDot.image = family.dotImage(size: Self.dotSize)
+        pill.onFont = { [weak self] face, commit in self?.choose(family: face, commit: commit) }
+        pill.onColor = { [weak self] color, commit in self?.choose(color: color, commit: commit) }
+        pill.onDelete = { [weak self] in self?.deleteTapped() }
         window.invalidateShadow()
     }
 
@@ -265,8 +141,8 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
         let color = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
-        color.image = Swatch.image(hex: colorHex)
-        color.submenu = paletteMenu.menu(currentHex: colorHex)
+        color.image = Swatch.image(hex: styler.colorHex)
+        color.submenu = paletteMenu.menu(currentHex: styler.colorHex)
         menu.addItem(color)
         if pinChoices.count >= 2 {
             let pin = NSMenuItem(title: "Pin", action: nil, keyEquivalent: "")
@@ -292,208 +168,34 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         pinCurrent = sender.tag
     }
 
-    // MARK: - Pill
+    // MARK: - Choosing a look
 
-    /// Move the pill to `mode`, growing it leftwards from its right edge so the corner it's
-    /// parked in stays put. Whatever the mode shows is just an ordered list of dots, so one
-    /// width and one layout serve the three dots and both pickers alike.
-    /// What the current mode puts in the pill, left to right.
-    private func shownDots() -> [NSButton] {
-        switch pillMode {
-        case .closed: return []
-        case .open: return [fontDot, colorDot, deleteDot]
-        case .font, .color: return choiceDots
-        }
-    }
-
-    /// Lay the row out and size the capsule around it. Widths stop being uniform the moment a
-    /// font choice opens into "Tack", so the row is walked rather than indexed — `pillSize` is
-    /// this same sum for the uniform case, which is all the closed and open sizes need.
-    ///
-    /// The capsule grows leftwards (`maxX` fixed), so a dot that widens by Δ pushes the pill's
-    /// left edge out by the same Δ: its own right edge, and every dot to its right, stay put.
-    /// That's what keeps the cursor on the dot it just opened.
-    private func layoutPill() {
-        let shown = shownDots()
-        var x = Self.pillPad.width
-        for dot in shown {
-            let w = (dot as? FontChoiceButton)?.width ?? Self.dotSize
-            dot.animator().frame = NSRect(x: x, y: Self.pillPad.height, width: w, height: Self.dotSize)
-            x += w + Self.dotGap
-        }
-        let width = shown.isEmpty ? Self.pillClosedSize.width : x - Self.dotGap + Self.pillPad.width
-        let frame = pill.frame
-        pill.animator().frame = NSRect(
-            x: frame.maxX - width, y: frame.minY, width: width, height: frame.height)
-    }
-
-    private func setPill(_ mode: PillMode, animated: Bool = true) {
-        guard mode != pillMode else { return }
-        pillMode = mode
-        let spent = choiceDots  // the picker dots the previous mode built; dropped once faded out
-        switch mode {
-        case .closed, .open: choiceDots = []
-        case .font: choiceDots = fontChoices()
-        case .color: choiceDots = colorChoices()
-        }
-        choiceDots.forEach(pill.addSubview)
-
-        let shown = shownDots()
-        let gone = spent + [fontDot, colorDot, deleteDot].filter { !shown.contains($0) }
-        shown.forEach { $0.isHidden = false }
-        // Hide the outgoing dots now, not on completion: a delete dot lingering under the swatches
-        // for the length of the animation is a note deleted by accident. Closing is the exception —
-        // there the shrinking capsule is *meant* to wipe them away.
-        if mode != .closed { gone.forEach { $0.isHidden = true } }
-
-        NSAnimationContext.runAnimationGroup(
-            { ctx in
-                ctx.duration = animated ? 0.14 : 0
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                layoutPill()
-            },
-            completionHandler: {
-                if mode == .closed { gone.forEach { $0.isHidden = true } }
-                spent.forEach { $0.removeFromSuperview() }
-            })
-    }
-
-    // MARK: - Pickers
-
-    /// One dot per typeface, each wearing its own "T" — and opening to the whole word under the
-    /// cursor, which is the preview: you read "Tack" in the face before you commit to it.
-    private func fontChoices() -> [NSButton] {
-        NoteFont.allCases.enumerated().map { i, face in
-            let b = FontChoiceButton(frame: Self.dotFrame(index: i))
-            b.isBordered = false
-            b.imagePosition = .imageOnly
-            b.setAccessibilityLabel(face.rawValue)
-            b.toolTip = face.rawValue
-            b.face = face
-            let borderWidth: CGFloat = face == family ? 2 : 1
-            b.narrow = face.dotImage(size: Self.dotSize, borderWidth: borderWidth)
-            b.wide = face.wordImage(height: Self.dotSize, borderWidth: borderWidth)
-            b.image = b.narrow
-            b.target = self
-            b.action = #selector(fontChosen(_:))
-            // The guard is load-bearing: opening the dot changes its frame, which rebuilds the
-            // tracking area, which re-posts mouseEntered — without it that loops forever.
-            b.onHover = { [weak self, weak b] inside in
-                guard let self, let b, b.expanded != inside else { return }
-                b.expanded = inside
-                renderFamily(inside ? face : family)
-                // Slower than the pill's own 0.14, and on a long tail rather than easeOut: this
-                // one you're meant to *read* — the word unrolling is the preview.
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.45
-                    ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
-                    self.layoutPill()
-                }
-            }
-            return b
-        }
-    }
-
-    /// One dot per palette colour. ponytail: colours past what the note is wide enough to hold are
-    /// dropped — the right-click grid is the full palette, and it scrolls with the menu.
-    private func colorChoices() -> [NSButton] {
-        let room = Self.pillDots(fitting: pill.superview?.bounds.width ?? window.frame.width)
-        return NotePreferences.shared.palette.prefix(room).enumerated().map { i, hex in
-            let b = ColorSwatchButton(frame: Self.dotFrame(index: i))
-            b.isBordered = false
-            b.imagePosition = .imageOnly
-            b.setAccessibilityLabel(hex)
-            b.hex = hex
-            b.image = Swatch.image(
-                hex: hex, size: Self.dotSize, radius: Self.dotSize / 2,
-                borderWidth: hex == colorHex ? 2 : 1)
-            b.wantsLayer = true
-            b.onHover = { [weak self, weak b] inside in
-                guard let self, let layer = b?.layer else { return }
-                let target = inside ? CATransform3DMakeScale(1.1, 1.1, 1) : CATransform3DIdentity
-                let animation = CABasicAnimation(keyPath: "transform")
-                animation.fromValue = layer.presentation()?.transform ?? layer.transform
-                animation.toValue = target
-                animation.duration = 0.14
-                animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                layer.add(animation, forKey: "hoverScale")
-                layer.transform = target
-                applyTint(Swatch.color(fromHex: inside ? hex : colorHex))
-            }
-            b.target = self
-            b.action = #selector(colorChosen(_:))
-            return b
-        }
-    }
-
-    @objc private func pickFont() { setPill(.font) }
-    @objc private func pickColor() { setPill(.color) }
-
-    @objc private func fontChosen(_ sender: NSButton) {
-        guard let choice = sender as? FontChoiceButton else { return }
-        family = choice.face
-        applyFamily()
-        scheduleSave()
-        setPill(.open)
-    }
-
-    @objc private func colorChosen(_ sender: NSButton) {
-        guard let swatch = sender as? ColorSwatchButton else { return }
-        apply(color: Swatch.color(fromHex: swatch.hex))
-        setPill(.open)
-    }
-
-    // MARK: - Colour
-
-    /// How much of the palette colour sits over the blur. The material underneath (.popover)
-    /// is already milky, so anything much past ~0.35 buries the blur and the card reads as
-    /// solid pastel — which is exactly what it shipped as at 0.6, and why this is low now.
-    private static let tintAlpha: CGFloat = 0.35
-
-    private func applyTint(_ color: NSColor) {
-        tintView.layer?.backgroundColor = color.withAlphaComponent(Self.tintAlpha).cgColor
-        // Full strength on the dot: it's the colour's label, not another sheer wash of it.
-        colorDot.image = Swatch.image(
-            hex: Swatch.hex(from: color), size: Self.dotSize, radius: Self.dotSize / 2)
-    }
-
-    /// The chosen colour lands here (from a swatch click or live from the system panel):
-    /// remember it, show it, persist it.
-    private func apply(color: NSColor) {
-        colorHex = Swatch.hex(from: color)
-        applyTint(color)
+    /// What choosing a typeface means, whether the pill is previewing one under the cursor or
+    /// the user has settled on it. Preview and commit share the exact same rendering path; only
+    /// a commit adopts the face, so leaving a choice restores the note without ever scheduling a
+    /// save. A commit also keeps the caret, which a preview has nothing to put back.
+    private func choose(family face: NoteFont, commit: Bool) {
+        if commit { styler.commitFamily(face) } else { styler.useFamily(face) }
+        editor.reflow(keepCaret: commit)
+        guard commit else { return }
+        pill.refreshDots()
         scheduleSave()
     }
 
-    /// Re-render the buffer in the current face: markdown out, family set, markdown back in. The
-    /// round trip is the one `show` already does, and `--selftest` asserts it's lossless — mapping
-    /// every run's font by hand would be the same result with more ways to get it wrong.
-    private func applyFamily() {
-        let caret = textView.selectedRange().location
-        renderFamily(family)
-        textView.editBlock(at: caret)  // also drops any block selection, whose rect just moved
-    }
-
-    /// Preview and commit share the exact same rendering path; only `family` itself is persisted,
-    /// so leaving a choice can restore it without ever scheduling a save.
-    private func renderFamily(_ face: NoteFont) {
-        MarkdownStyle.family = face
-        fontDot.image = face.dotImage(size: Self.dotSize)
-        guard let ts = textView.textStorage else { return }
-        // No `textView.font =` here: that setter rewrites the font of *all* the text, wiping the
-        // heading, bold and code runs the parse just laid down.
-        ts.setAttributedString(MarkdownDocument.parse(MarkdownDocument.serialize(ts)))
-        textView.typingAttributes = MarkdownStyle.base
-        MarkdownInput.syncTypingToBlock(textView)
+    /// The same, for a colour — from a swatch under the cursor, a swatch click, or live from the
+    /// system colour panel behind the card's right-click menu.
+    private func choose(color: NSColor, commit: Bool) {
+        if commit { styler.commitColor(color) } else { styler.showColor(color) }
+        guard commit else { return }
+        pill.refreshDots()
+        scheduleSave()
     }
 
     // MARK: - Show / hide
 
     /// A single click on the red dot is the whole delete gesture, so a note with text asks first.
     private func confirmDelete() -> Bool {
-        guard !textView.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return true
-        }
+        guard !editor.isBlank else { return true }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Delete this note?"
@@ -503,9 +205,9 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    @objc private func deleteTapped() {
+    private func deleteTapped() {
         guard confirmDelete() else { return }
-        let deletion = Note(text: "", dx: dx, dy: dy, color: colorHex)
+        let deletion = Note(text: "", dx: anchor.dx, dy: anchor.dy, color: styler.colorHex)
         guard saveHandler(deletion) else { return }
         saver.cancel()  // a stale delayed save must not recreate the successfully deleted note
         active = false
@@ -518,27 +220,15 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     func show(note: Note, bounds: CGRect, save: @escaping (Note) -> Bool) -> Bool {
         guard saver.flush() else { return false }
         self.saveHandler = save
-        self.dx = note.dx
-        self.dy = note.dy
-        self.tracked = bounds
         active = true
         occluded = false  // re-evaluated on the next tracking frame
-        colorHex = note.color ?? NotePreferences.shared.defaultColorHex
-        applyTint(Swatch.color(fromHex: colorHex))
-        family = note.font.flatMap(NoteFont.init(rawValue:)) ?? .sans
-        MarkdownStyle.family = family  // set before the parse below: it bakes the fonts in
-        fontDot.image = family.dotImage(size: Self.dotSize)
-        setPill(.closed, animated: false)  // the window is reused: never arrive already open
-        // Load markdown as rich text (markers consumed into attributes). Programmatic, so it
-        // fires no textDidChange — nothing to save, and no input rule should run on a load.
-        textView.editBlock(at: 0)  // the window is reused: never carry a block selection over
-        textView.textStorage?.setAttributedString(MarkdownDocument.parse(note.text))
-        textView.typingAttributes = MarkdownStyle.base
-        MarkdownInput.syncTypingToBlock(textView)  // a note that opens on a heading types as one
-        desired = NSSize(
-            width: note.w ?? NotePreferences.shared.defaultSize.width,
-            height: note.h ?? NotePreferences.shared.defaultSize.height)
-        applyPosition()  // sizes the note (capped to the tracked window) and positions it
+        // Loaded before the parse in `editor.load`: it bakes the note's face into the text.
+        styler.load(
+            colorHex: note.color ?? NotePreferences.shared.defaultColorHex,
+            family: note.font.flatMap(NoteFont.init(rawValue:)) ?? .sans)
+        pill.reset()  // the window is reused: never arrive already open
+        editor.load(note.text)
+        anchor.begin(note: note, bounds: bounds)
         // Switching between two notes reuses this one window, so pop unconditionally rather than
         // going through applyVisibility — otherwise the incoming note would just teleport in.
         shown = true
@@ -554,11 +244,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
     }
 
     /// The note's on-screen rect in top-left screen coords, for occlusion tests.
-    func screenRectTopLeft() -> CGRect {
-        let f = window.frame
-        return CGRect(
-            x: f.minX, y: Screens.primaryHeight() - f.maxY, width: f.width, height: f.height)
-    }
+    func screenRectTopLeft() -> CGRect { anchor.screenRectTopLeft() }
 
     private func applyVisibility() {
         let visible = active && !occluded
@@ -577,7 +263,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
 
     func focusForEditing() {
         window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(textView)
+        window.makeFirstResponder(editor.textView)
     }
 
     // MARK: - Pop animation
@@ -622,7 +308,7 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
             })
     }
 
-    // MARK: - Geometry
+    // MARK: - Tracking
 
     /// A display link synced to whatever display the note is on, so the caller samples the
     /// window's position in vsync phase at the real refresh rate (120Hz on ProMotion) instead
@@ -631,127 +317,23 @@ final class NoteWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         window.displayLink(target: target, selector: selector)
     }
 
-    /// The tracked window moved or resized — keep the offset, reposition. No-op if unchanged.
-    /// A resize re-clamps, so shrinking the window pulls the note back inside with it.
-    func updateWindow(bounds: CGRect) {
-        guard bounds != tracked else { return }
-        tracked = bounds
-        applyPosition()
-    }
+    /// The tracked window moved or resized — keep the offset, reposition.
+    func updateWindow(bounds: CGRect) { anchor.updateWindow(bounds: bounds) }
 
-    /// Frame changes of our own must not read back as the user's: the window delegate fires
-    /// either way, and this flag is what tells the two apart. A bracket rather than two bare
-    /// assignments, so no early return can ever leave the flag stuck on.
-    private func withProgrammaticMove(_ body: () -> Void) {
-        isProgrammaticMove = true
-        body()
-        isProgrammaticMove = false
-    }
+    func windowDidMove(_ notification: Notification) { anchor.windowDidMove() }
 
-    private func applyPosition() {
-        let fit = Coord.fit(desired: desired, window: tracked.size)
-        // Let the note shrink below its usual floor when the window is smaller than that floor,
-        // and stop the user resizing it past the window — both keep the note inside the surface.
-        window.minSize = Coord.fit(desired: NotePreferences.shared.minSize, window: tracked.size)
-        window.maxSize = tracked.size
-        // Display-only clamp: stored dx/dy keep the note's true spot, mirroring `desired` for
-        // size. Writing the clamp back means one frame of tracking a bogus window rewrites
-        // where the note lives for good. The user paths (drag, resize) clamp-and-store
-        // themselves — there the border genuinely is the new position.
-        let c = Coord.clamp(dx: dx, dy: dy, note: fit, window: tracked.size)
-        let topLeft = Coord.cocoaTopLeft(
-            finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
-            dx: c.dx, dy: c.dy, primaryHeight: Screens.primaryHeight())
-        withProgrammaticMove {
-            window.setFrame(
-                NSRect(x: topLeft.x, y: topLeft.y - fit.height, width: fit.width, height: fit.height),
-                display: true)
-        }
-    }
+    func windowDidResize(_ notification: Notification) { anchor.windowDidResize() }
 
-    /// Live drag from DragGlassView: turn the proposed origin into an offset, clamp, move.
-    /// The clamp runs before the frame changes, so the note is blocked at the border instead
-    /// of escaping and snapping back.
-    private func dragTo(origin: NSPoint) {
-        (dx, dy) = Coord.offsets(
-            noteMinX: Double(origin.x), noteCocoaMaxY: Double(origin.y + window.frame.height),
-            finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
-            primaryHeight: Screens.primaryHeight())
-        storeClamped()
-        applyPosition()
-        scheduleSave()
-    }
+    // MARK: - Saving
 
-    /// Clamp the stored offset itself — only for user actions, where the border really is
-    /// the note's new position. Programmatic tracking must never do this (see applyPosition).
-    private func storeClamped() {
-        let fit = Coord.fit(desired: desired, window: tracked.size)
-        (dx, dy) = Coord.clamp(dx: dx, dy: dy, note: fit, window: tracked.size)
-    }
-
-    // User resized the note (drags don't land here — DragGlassView feeds dragTo directly):
-    // recompute the offset from the Finder window's top-left, hold it back inside, then save.
-    private func noteGeometryChanged(resized: Bool) {
-        guard !isProgrammaticMove else { return }
-        let f = window.frame
-        (dx, dy) = Coord.offsets(
-            noteMinX: Double(f.minX), noteCocoaMaxY: Double(f.maxY),
-            finderLeft: Double(tracked.minX), finderTop: Double(tracked.minY),
-            primaryHeight: Screens.primaryHeight())
-        if resized {
-            // A resize stops dead at the border, like a drag does: cut the edge the user pushed
-            // past it, don't slide the note over — sliding is what made the note grow out of the
-            // opposite side. What survives the cut is the size the note keeps (`desired`).
-            let c = Coord.contain(dx: dx, dy: dy, note: f.size, window: tracked.size)
-            (dx, dy) = (c.dx, c.dy)
-            desired = c.size
-        } else {
-            storeClamped()
-        }
-        applyPosition()
-        scheduleSave()
-    }
-
-    func windowDidMove(_ notification: Notification) { noteGeometryChanged(resized: false) }
-
-    /// Dragging the top or left edge moves the note's top-left corner without moving the frame's
-    /// origin, so windowDidMove never fires — a resize has to recompute the offset too, not just
-    /// re-clamp, or those two edges would fight the user.
-    func windowDidResize(_ notification: Notification) { noteGeometryChanged(resized: true) }
-
-    // MARK: - Text and saving
-
-    /// Run the markdown input rules, then keep bullet/todo styling fresh. `reforming` guards the
-    /// rules' own edits (which post didChangeText) from re-entering and running the rules again.
-    func textDidChange(_ notification: Notification) {
-        if !reforming {
-            reforming = true
-            MarkdownInput.autoformat(textView)
-            MarkdownInput.headingRule(textView)
-            MarkdownInput.listRule(textView)
-            reforming = false
-        }
-        scheduleSave()
-    }
-
-    /// Blocks keep their style wherever you type in them: on every caret move the block under it
-    /// hands its heading level to the typing attributes.
-    func textViewDidChangeSelection(_ notification: Notification) {
-        MarkdownInput.syncTypingToBlock(textView)
-    }
-
-    /// Enter starts a body line; Backspace at a heading's start un-headings it. Everything else
-    /// falls through to the text view's own handling.
-    func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        MarkdownInput.handle(selector, textView)
-    }
-
+    /// The one place a whole note is assembled: what it says, where it sits, and how it looks.
+    /// Each part owns only its own slice, so nothing below this class can build one.
     private func scheduleSave() {
-        // Serialize the rich text back to markdown — the buffer has no markers, disk does.
-        let text = textView.textStorage.map(MarkdownDocument.serialize) ?? textView.string
         let note = Note(
-            text: text, dx: dx, dy: dy, color: colorHex, font: family.rawValue,
-            w: Double(desired.width), h: Double(desired.height))  // intended size, not the capped one
+            text: editor.markdown, dx: anchor.dx, dy: anchor.dy, color: styler.colorHex,
+            font: styler.family.rawValue,
+            // intended size, not the capped one
+            w: Double(anchor.desired.width), h: Double(anchor.desired.height))
         // snapshot: an in-flight save must use the handler — and level — of the note it was
         // scheduled for, not whichever note is showing 0.5s later
         let save = saveHandler

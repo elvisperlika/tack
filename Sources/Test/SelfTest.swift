@@ -612,28 +612,28 @@ extension SelfTest {
     /// The pill's two shapes: a circle at rest, wider when hovered, and never wider than the
     /// narrowest note it has to sit in.
     static func pillGeometry() {
-        let closed = NoteWindow.pillClosedSize
+        let closed = NotePill.pillClosedSize
         assert(closed.width == closed.height, "closed, the pill should be a circle: \(closed)")
-        let open = NoteWindow.pillOpenSize
+        let open = NotePill.pillOpenSize
         assert(open.width > closed.width, "hovering should widen the pill")
         assert(open.height == closed.height, "only the width moves, so the corner radius holds")
         assert(
-            open.width + NoteWindow.pillInset * 2 <= NotePreferences.shared.minSize.width,
+            open.width + NotePill.pillInset * 2 <= NotePreferences.shared.minSize.width,
             "the open pill should fit the smallest note: \(open.width)")
 
         // The picker's strip is cut to what the note can hold — inverting pillSize, so the two
         // can't drift apart. One dot is the floor: a picker with nothing in it is a dead end.
-        assert(NoteWindow.pillDots(fitting: 10) == 1, "a hopeless width should still offer one dot")
+        assert(NotePill.pillDots(fitting: 10) == 1, "a hopeless width should still offer one dot")
         for width in [100.0, 160.0, 220.0, 400.0] as [CGFloat] {
-            let n = NoteWindow.pillDots(fitting: width)
-            let fits = NoteWindow.pillSize(dots: n).width + NoteWindow.pillInset * 2 <= width
+            let n = NotePill.pillDots(fitting: width)
+            let fits = NotePill.pillSize(dots: n).width + NotePill.pillInset * 2 <= width
             assert(fits, "\(n) dots should fit a \(width)pt note")
             assert(
-                NoteWindow.pillSize(dots: n + 1).width + NoteWindow.pillInset * 2 > width,
+                NotePill.pillSize(dots: n + 1).width + NotePill.pillInset * 2 > width,
                 "\(n) dots is short of what fits a \(width)pt note")
         }
         assert(
-            NoteWindow.pillDots(fitting: NotePreferences.shared.defaultSize.width)
+            NotePill.pillDots(fitting: NotePreferences.shared.defaultSize.width)
                 >= NotePreferences.shared.palette.count,
             "the preset palette should fit a default-sized note")
     }
