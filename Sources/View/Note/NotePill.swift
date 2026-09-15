@@ -163,22 +163,15 @@ final class NotePill: NSObject {
         }
     }
 
-    /// Lay the row out and size the capsule around it. Widths stop being uniform the moment a
-    /// font choice opens into "Tack", so the row is walked rather than indexed — `pillSize` is
-    /// this same sum for the uniform case, which is all the closed and open sizes need.
+    /// Lay the row of dots out and size the capsule around it — every dot is the same circle,
+    /// so `pillSize` is the one place that arithmetic lives.
     ///
-    /// The capsule grows leftwards (`maxX` fixed), so a dot that widens by Δ pushes the pill's
-    /// left edge out by the same Δ: its own right edge, and every dot to its right, stay put.
-    /// That's what keeps the cursor on the dot it just opened.
+    /// The capsule grows leftwards (`maxX` fixed), so opening it pushes its left edge out and
+    /// every dot's right edge stays put. That's what keeps the cursor on the dot it just opened.
     private func layout() {
         let shown = shownDots()
-        var x = Self.pillPad.width
-        for dot in shown {
-            let w = (dot as? FontChoiceButton)?.width ?? Self.dotSize
-            dot.animator().frame = NSRect(x: x, y: Self.pillPad.height, width: w, height: Self.dotSize)
-            x += w + Self.dotGap
-        }
-        let width = shown.isEmpty ? Self.pillClosedSize.width : x - Self.dotGap + Self.pillPad.width
+        for (i, dot) in shown.enumerated() { dot.animator().frame = Self.dotFrame(index: i) }
+        let width = shown.isEmpty ? Self.pillClosedSize.width : Self.pillSize(dots: shown.count).width
         let frame = view.frame
         view.animator().frame = NSRect(
             x: frame.maxX - width, y: frame.minY, width: width, height: frame.height)
@@ -221,8 +214,8 @@ final class NotePill: NSObject {
 
     // MARK: - Pickers
 
-    /// One dot per typeface, each wearing its own "T" — and opening to the whole word under the
-    /// cursor, which is the preview: you read "Tack" in the face before you commit to it.
+    /// One dot per typeface, each wearing its own "T". Hovering previews the face in the note's
+    /// own text, which is the thing you actually want to read it in.
     private func fontChoices() -> [NSButton] {
         NoteFont.allCases.enumerated().map { i, face in
             let b = FontChoiceButton(frame: Self.dotFrame(index: i))
@@ -231,25 +224,13 @@ final class NotePill: NSObject {
             b.setAccessibilityLabel(face.rawValue)
             b.toolTip = face.rawValue
             b.face = face
-            let borderWidth: CGFloat = face == styler.family ? 2 : 1
-            b.narrow = face.dotImage(size: Self.dotSize, borderWidth: borderWidth)
-            b.wide = face.wordImage(height: Self.dotSize, borderWidth: borderWidth)
-            b.image = b.narrow
+            b.image = face.dotImage(
+                size: Self.dotSize, borderWidth: face == styler.family ? 2 : 1)
             b.target = self
             b.action = #selector(fontChosen(_:))
-            // The guard is load-bearing: opening the dot changes its frame, which rebuilds the
-            // tracking area, which re-posts mouseEntered — without it that loops forever.
-            b.onHover = { [weak self, weak b] inside in
-                guard let self, let b, b.expanded != inside else { return }
-                b.expanded = inside
+            b.onHover = { [weak self] inside in
+                guard let self else { return }
                 onFont(inside ? face : styler.family, false)
-                // Slower than the pill's own 0.14, and on a long tail rather than easeOut: this
-                // one you're meant to *read* — the word unrolling is the preview.
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.45
-                    ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
-                    self.layout()
-                }
             }
             return b
         }

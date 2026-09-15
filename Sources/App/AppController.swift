@@ -5,16 +5,9 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let note = NoteWindow()
     private var statusItem: NSStatusItem?
-    /// The Tack window, built lazily on first open. Empty placeholder for now.
-    lazy var mainWindow: NSWindow = {
-        let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 480),
-            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        w.setFrameAutosaveName("tackMain")
-        w.center()
-        w.isReleasedWhenClosed = false
-        return w
-    }()
+    /// The Tack window — every note at once. Built on first open, so quitting without ever
+    /// opening it never constructs one.
+    lazy var grid = NoteGrid { [weak self] error in self?.reportPersistenceError(error) }
     private var pollTimer: Timer?  // slow: which surface is focused (~0.4s)
     private var trackLink: CADisplayLink? {  // vsync glue: the shown note follows its window
         didSet { oldValue?.invalidate() }  // an outlived link would keep firing
@@ -35,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        note.flushPendingSave() ? .terminateNow : .terminateCancel
+        note.flushPendingSave() && grid.flush() ? .terminateNow : .terminateCancel
     }
 
     // MARK: - Target resolution

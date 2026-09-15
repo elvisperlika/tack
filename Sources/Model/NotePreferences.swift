@@ -52,4 +52,30 @@ final class NotePreferences {
         list.remove(at: i)
         defaults.set(list, forKey: Self.paletteKey)
     }
+
+    // MARK: - Finder notes
+
+    // ponytail: Finder notes live in a .tack.json inside their own folder, with no index
+    // anywhere — so the folders are remembered here as they're written. Folders noted before
+    // this shipped surface only after their next edit; swap in an NSMetadataQuery scan if
+    // that's ever a real complaint.
+    private static let foldersKey = "noteFolders"
+
+    /// Folders known to hold a note. Entries can go stale (a folder moved or deleted behind
+    /// Tack's back), so readers must tolerate a nil load.
+    var knownFolders: [String] { defaults.stringArray(forKey: Self.foldersKey) ?? [] }
+
+    func rememberFolder(_ folder: String) { index(folder, keep: true) }
+
+    func forgetFolder(_ folder: String) { index(folder, keep: false) }
+
+    /// Every write prunes: a folder that has since been deleted, renamed or unmounted is dead
+    /// weight, and nothing else ever goes looking for it.
+    private func index(_ folder: String, keep: Bool) {
+        var list = knownFolders.filter {
+            $0 != folder && FileManager.default.fileExists(atPath: $0)
+        }
+        if keep { list.append(folder) }
+        defaults.set(list, forKey: Self.foldersKey)
+    }
 }

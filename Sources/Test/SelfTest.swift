@@ -9,6 +9,8 @@ enum SelfTest {
         writeFailureIsReported()
         centralBackupKeepsPreviousVersion()
         appNotesRoundTrip()
+        allAppNotes()
+        noteKeyLabels()
         stableKeyMigration()
         coordFlip()
         fitToWindow()
@@ -159,6 +161,67 @@ enum SelfTest {
         rejects(.invalidIndex(2)) { try tree.move(root.id, at: 2) }
         rejects(.invalidIndex(1)) { try tree.move(child.id, under: other.id, at: 1) }
         rejects(.missingBlock(missing)) { try tree.remove(missing) }
+    }
+
+    static func allAppNotes() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("appnotes.json")
+
+        assert(try! AppNotes.all(from: url).isEmpty, "no file yet is an empty list, not an error")
+        try! AppNotes.save(key: "com.apple.Preview|Report.pdf", note: Note(text: "a", dx: 1, dy: 2), to: url)
+        try! AppNotes.save(key: "com.apple.Terminal|/dev/ttys003", note: Note(text: "b", dx: 3, dy: 4), to: url)
+        let all = try! AppNotes.all(from: url)
+        assert(all.keys.sorted() == ["com.apple.Preview|Report.pdf", "com.apple.Terminal|/dev/ttys003"],
+            "every stored key is listed")
+        assert(all["com.apple.Preview|Report.pdf"]?.text == "a", "notes come back whole")
+
+        try! AppNotes.save(key: "com.apple.Preview|Report.pdf", note: Note(text: "", dx: 1, dy: 2), to: url)
+        assert(try! AppNotes.all(from: url).keys.sorted() == ["com.apple.Terminal|/dev/ttys003"],
+            "a deleted note leaves the list")
+
+        // The Finder half: a real folder with a note, and one that has gone since it was indexed.
+        let folder = dir.appendingPathComponent("Documents")
+        try! FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try! NoteStore.save(folder: folder.path, note: Note(text: "finder", dx: 5, dy: 6))
+        defer { NotePreferences.shared.forgetFolder(folder.path) }  // save() indexes the real domain
+        let merged = StoredNote.list(
+            appNotes: try! AppNotes.all(from: url),
+            folders: [folder.path, dir.appendingPathComponent("gone").path])
+        assert(merged.map(\.key) == [
+            Container.key(path: [FinderContainer.bundleID, folder.path], level: 1),
+            "com.apple.Terminal|/dev/ttys003",
+        ], "both stores merge, sorted case-insensitively, and an unreachable folder drops out")
+        assert(merged[0].folder == folder.path, "a Finder note knows the folder to write back to")
+        assert(merged[1].folder == nil, "an app note has no folder")
+        assert(merged[0].note.text == "finder" && merged[1].note.text == "b", "notes survive the merge")
+
+        try! merged[0].save(Note(text: "", dx: 5, dy: 6))
+        assert(try! NoteStore.load(folder: folder.path) == nil, "a StoredNote deletes through its own store")
+    }
+
+    static func noteKeyLabels() {
+        // Finder is the one app guaranteed installed, so it's the only name worth asserting.
+        assert(Container.appName(bundleID: FinderContainer.bundleID) == "Finder", "installed apps get their name")
+        let ghost = "com.example.not-installed"
+        assert(Container.appName(bundleID: ghost) == ghost, "an uninstalled app falls back to its bundle ID")
+        assert(Container.label(for: ghost + "|Draft") == ghost + " — Draft", "a window title reads as-is")
+        assert(Container.label(for: FinderContainer.bundleID + "|/Users/me/Projects") == "Finder — Projects",
+            "a folder reads as its own name")
+        assert(Container.label(for: "com.apple.Terminal|/dev/ttys003") == "Terminal — ttys003",
+            "a tty reads as the tab it is")
+        assert(Container.label(for: ghost + "|https://example.com/page") == ghost + " — example.com/page",
+            "a URL drops its scheme")
+        assert(Container.label(for: ghost + "|https://example.com/") == ghost + " — example.com",
+            "a bare host drops its trailing slash")
+        assert(Container.label(for: ghost) == ghost, "an app-level key is just the app")
+
+        assert(Container.scopeName(for: ghost) == "App", "one component is the whole app")
+        assert(Container.scopeName(for: FinderContainer.bundleID + "|/Users/me") == "Folder", "Finder pins to folders")
+        assert(Container.scopeName(for: "com.google.Chrome|https://example.com") == "Tab", "browsers pin to tabs")
+        assert(Container.scopeName(for: "com.apple.Terminal|/dev/ttys003") == "Tab", "terminals pin to tabs")
+        assert(Container.scopeName(for: ghost + "|Draft") == "Window", "everything else pins to windows")
     }
 
     static func appNotesRoundTrip() {
@@ -719,14 +782,11 @@ extension SelfTest {
         // Distinct faces, or the font picker would offer three identical choices.
         let faces = Set(NoteFont.allCases.map { $0.font(ofSize: 14).fontName })
         assert(faces.count == NoteFont.allCases.count, "the three faces should differ: \(faces)")
-        // Hovering a choice opens the dot into the whole word, so the word has to be the wider of
-        // the two — and the dot itself has to stay a circle, whatever the face measures.
+        // Every choice is the same circle, whatever the face measures — the picker's strip is
+        // laid out on that assumption.
         for face in NoteFont.allCases {
             let dot = face.dotImage(size: 16).size
-            let word = face.wordImage(height: 16).size
             assert(dot.width == dot.height, "\(face)'s dot should stay a circle: \(dot)")
-            assert(word.width > dot.width, "\(face) should widen to spell Tack: \(word)")
-            assert(word.height == dot.height, "\(face) should only widen, not grow taller")
         }
     }
 

@@ -95,13 +95,8 @@ enum NoteFont: String, CaseIterable {
         capsule(height: size, text: "T", width: size, borderWidth: borderWidth)
     }
 
-    func wordImage(height: CGFloat, borderWidth: CGFloat = 1) -> NSImage {
-        capsule(height: height, text: "Tack", borderWidth: borderWidth)
-    }
-
-    /// Uses the text width unless a fixed width is supplied for a circular button.
     private func capsule(
-        height: CGFloat, text: String, width: CGFloat? = nil, borderWidth: CGFloat
+        height: CGFloat, text: String, width: CGFloat, borderWidth: CGFloat
     ) -> NSImage {
         let label = NSAttributedString(
             string: text,
@@ -109,7 +104,6 @@ enum NoteFont: String, CaseIterable {
                 .font: font(ofSize: height - 5), .foregroundColor: NSColor.black.withAlphaComponent(0.65),
             ])
         let box = label.size()
-        let width = width ?? max(height, (box.width + height * 0.7).rounded())
         let img = NSImage(size: NSSize(width: width, height: height))
         img.lockFocus()
         let rect = NSRect(x: 1, y: 1, width: width - 2, height: height - 2)

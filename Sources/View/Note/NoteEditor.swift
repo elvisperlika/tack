@@ -16,6 +16,14 @@ final class NoteEditor: NSObject, NSTextViewDelegate {
 
     private var reforming = false  // guards the input rules' own edits from re-entering textDidChange
 
+    /// The face *this* note is drawn in. `MarkdownStyle.family` is a global from the days of one
+    /// window and one note; the Tack window puts several notes in several faces on screen at
+    /// once, so every path that parses or restyles this buffer puts its own face back first.
+    /// Deliberately not `reflow`, whose contract is "render in the current global" — that is
+    /// exactly how the pill previews a face under the cursor.
+    var family = NoteFont.sans
+    private func adoptFamily() { MarkdownStyle.family = family }
+
     init(frame: NSRect) {
         view = NSScrollView(frame: frame)
         view.drawsBackground = false
@@ -56,9 +64,10 @@ final class NoteEditor: NSObject, NSTextViewDelegate {
     }
 
     /// Load markdown as rich text (markers consumed into attributes). Programmatic, so it fires
-    /// no textDidChange — nothing to save, and no input rule should run on a load. The caller
-    /// sets `MarkdownStyle.family` first: the parse bakes the fonts in.
+    /// no textDidChange — nothing to save, and no input rule should run on a load. `family` is
+    /// adopted first: the parse bakes the fonts in.
     func load(_ text: String) {
+        adoptFamily()
         textView.editBlock(at: 0)  // the window is reused: never carry a block selection over
         textView.textStorage?.setAttributedString(MarkdownDocument.parse(text))
         textView.typingAttributes = MarkdownStyle.base
@@ -87,6 +96,7 @@ final class NoteEditor: NSObject, NSTextViewDelegate {
     /// Run the markdown input rules, then keep bullet/todo styling fresh. `reforming` guards the
     /// rules' own edits (which post didChangeText) from re-entering and running the rules again.
     func textDidChange(_ notification: Notification) {
+        adoptFamily()  // the rules below restyle through MarkdownStyle, so the face must be ours
         if !reforming {
             reforming = true
             MarkdownInput.autoformat(textView)
@@ -100,6 +110,7 @@ final class NoteEditor: NSObject, NSTextViewDelegate {
     /// Blocks keep their style wherever you type in them: on every caret move the block under it
     /// hands its heading level to the typing attributes.
     func textViewDidChangeSelection(_ notification: Notification) {
+        adoptFamily()
         MarkdownInput.syncTypingToBlock(textView)
     }
 

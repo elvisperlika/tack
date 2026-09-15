@@ -114,8 +114,10 @@ enum NoteStore {
         _ = try JSONFile.load(Note.self, from: url)  // never overwrite or delete malformed data
         if note.isDeletion {
             try JSONFile.delete(url)
+            NotePreferences.shared.forgetFolder(folder)
         } else {
             try JSONFile.save(note, to: url)
+            NotePreferences.shared.rememberFolder(folder)  // the only index these notes get
         }
     }
 }
@@ -134,13 +136,16 @@ enum AppNotes {
         return dir.appendingPathComponent("appnotes.json")
     }
 
-    private static func all(at url: URL) throws -> [String: Note] {
+    /// Every app note at once, keyed by container key — what the Tack window lists.
+    static func all() throws -> [String: Note] { try all(from: fileURL()) }
+
+    static func all(from url: URL) throws -> [String: Note] {
         try JSONFile.load([String: Note].self, from: url) ?? [:]
     }
 
     static func load(key: String) throws -> Note? { try load(key: key, from: fileURL()) }
 
-    static func load(key: String, from url: URL) throws -> Note? { try all(at: url)[key] }
+    static func load(key: String, from url: URL) throws -> Note? { try all(from: url)[key] }
 
     /// Load a stable key, migrating the old title-dependent key on first access.
     static func load(key: String, migrating legacyKey: String) throws -> Note? {
@@ -160,8 +165,50 @@ enum AppNotes {
     }
 
     static func save(key: String, note: Note, to url: URL) throws {
-        var dict = try all(at: url)
+        var dict = try all(from: url)
         dict[key] = note.isDeletion ? nil : note
         try JSONFile.save(dict, to: url, backup: true)
+    }
+}
+
+/// One note wherever it happens to live, under the key its container writes it with — bundle ID
+/// first, so a single format both labels a note and routes it back to the right store. What the
+/// Tack window lists.
+struct StoredNote {
+    let key: String
+    var note: Note
+
+    /// Finder notes only: the folder whose .tack.json holds this note.
+    var folder: String? {
+        let prefix = FinderContainer.bundleID + "|"
+        return key.hasPrefix(prefix) ? String(key.dropFirst(prefix.count)) : nil
+    }
+
+    /// Writes back to whichever store the note came from, at the very same key — a note pinned
+    /// to an app stays pinned to the app; the level is never re-derived.
+    func save(_ edited: Note) throws {
+        if let folder {
+            try NoteStore.save(folder: folder, note: edited)
+        } else {
+            try AppNotes.save(key: key, note: edited)
+        }
+    }
+
+    /// Every note Tack knows about, grouped by app (bundle IDs mix case, so the sort folds it).
+    static func all() throws -> [StoredNote] {
+        list(appNotes: try AppNotes.all(), folders: NotePreferences.shared.knownFolders)
+    }
+
+    /// The two stores merged. A folder whose note has gone (moved, deleted, or on an unmounted
+    /// volume) drops out rather than failing the whole list — one unreachable note must not cost
+    /// the user the rest of them.
+    static func list(appNotes: [String: Note], folders: [String]) -> [StoredNote] {
+        var all = appNotes.map { StoredNote(key: $0.key, note: $0.value) }
+        for folder in folders {
+            guard let note = try? NoteStore.load(folder: folder) else { continue }
+            let key = Container.key(path: [FinderContainer.bundleID, folder], level: 1)
+            all.append(StoredNote(key: key, note: note))
+        }
+        return all.sorted { $0.key.lowercased() < $1.key.lowercased() }
     }
 }

@@ -50,10 +50,11 @@ extension AppDelegate {
         note.focusForEditing()
     }
 
-    /// Opens the Tack window — empty for now, the future home of note management.
+    /// Opens the Tack window on every note. The floating note is flushed first: it can be up to
+    /// a debounce behind the disk the grid is about to read.
     @objc func openTack() {
-        mainWindow.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        note.flushPendingSave()
+        grid.open()
     }
 
     /// Terminates Tack through AppKit, which first asks the app delegate to flush pending saves.

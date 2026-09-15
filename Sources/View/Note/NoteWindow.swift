@@ -6,21 +6,18 @@ private final class KeyableWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
-/// One reusable floating post-it, and the assembler for the four parts that make one up: where
-/// it sits (`NoteAnchor`), what it says (`NoteEditor`), how it looks (`NoteStyler`) and how you
-/// change any of that (`NotePill`). Each part owns its own slice of a `Note`, so only this class
-/// can build a whole one — which is why saving lives here and nowhere else.
-///
-/// What is left of its own: the window and its glass card, showing and hiding, and the
-/// right-click menu.
+/// One reusable floating post-it: the window, where the note sits (`NoteAnchor`), and the card
+/// that fills it (`NoteCard`). The card owns what the note says and how it looks; this class
+/// owns everything about it being a *floating window* — showing and hiding, following the
+/// tracked window, the pin menu — and, because only it knows both halves, saving.
 final class NoteWindow: NSObject, NSWindowDelegate {
     private let window: KeyableWindow
     /// Where the note sits: the offset it keeps from the tracked window, and the size it wants.
     private let anchor: NoteAnchor
-    private let editor: NoteEditor  // the text, its markdown rules, and the only writer to it
-    private let styler: NoteStyler  // the note's colour and typeface, and the tint that shows one
-    private let pill: NotePill  // the control cluster in the card's top-right corner
-    private lazy var paletteMenu = PaletteMenu { [weak self] in self?.choose(color: $0, commit: true) }
+    private let card: NoteCard
+    private lazy var paletteMenu = PaletteMenu { [weak self] in
+        self?.card.choose(color: $0, commit: true)
+    }
 
     /// The pin levels the note can move between, pushed by the controller so NoteWindow stays
     /// ignorant of Container — the same split as the colour menu, which owns *how* one is chosen
@@ -38,31 +35,12 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     private var occluded = false  // the note's spot on the Finder window is covered
     private var shown = false  // what the last pop animated toward (the window stays visible while popping out)
 
-    /// Rounds the *material*. A .behindWindow blur is shaped by the window server from this
-    /// mask's alpha, not by the layer, so `cornerRadius` alone leaves a square pane of frost
-    /// (and a square shadow) around the rounded card. Stretchable, because the note resizes:
-    /// the cap insets pin the corners and the 1pt middle takes the stretch.
-    private static func roundedMask(radius: CGFloat) -> NSImage {
-        let edge = radius * 2 + 1
-        let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
-            NSColor.black.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
-            return true
-        }
-        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
-        image.resizingMode = .stretch
-        return image
-    }
-
     override init() {
-        let w = NotePreferences.shared.defaultSize.width
-        let h = NotePreferences.shared.defaultSize.height
-        let strip: CGFloat = 18  // top drag handle; the pill parks in its right corner
-        let radius: CGFloat = 12
+        let size = NotePreferences.shared.defaultSize
         // .resizable on a borderless window gets edge-dragging from AppKit for free — no grow
         // box, no drag tracking of our own.
         window = KeyableWindow(
-            contentRect: NSRect(x: 0, y: 0, width: w, height: h),
+            contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
         window.minSize = NotePreferences.shared.minSize
         window.level = .floating
@@ -74,51 +52,16 @@ final class NoteWindow: NSObject, NSWindowDelegate {
         // desktop that's active when its folder becomes frontmost, and stays there.
         window.collectionBehavior = [.moveToActiveSpace]
         anchor = NoteAnchor(window: window)
+        card = NoteCard(size: size)
+        window.contentView = card.view
 
-        // Rounded glass card: a blur of whatever sits behind the note, with the palette colour
-        // as a sheer tint over it. The bare tint is the drag area.
-        // ponytail: NSVisualEffectView is the glass this deployment target has — Apple's Liquid
-        // Glass (NSGlassEffectView) is macOS 26+, and Tack targets 13. Material is taste.
-        let glass = DragGlassView(frame: NSRect(x: 0, y: 0, width: w, height: h))
-        glass.material = .popover
-        glass.blendingMode = .behindWindow  // blur what's behind the note, not what's inside it
-        glass.state = .active  // stay frosted while the note isn't key, which is most of the time
-        glass.appearance = NSAppearance(named: .aqua)  // a light card with black text, even in dark mode
-        glass.maskImage = Self.roundedMask(radius: radius)  // rounds the material — see above
-        glass.wantsLayer = true
-        glass.layer?.cornerRadius = radius  // rounds the tint and text on top of it
-        glass.layer?.masksToBounds = true
-
-        // The palette colour lives here rather than on the glass: NSVisualEffectView owns its
-        // own layer's drawing, so a tint of our own needs a view of its own. The styler is the
-        // only thing that paints it, so it's the only thing that keeps it.
-        let tint = NSView(frame: glass.bounds)
-        tint.autoresizingMask = [.width, .height]
-        tint.wantsLayer = true
-        glass.addSubview(tint)
-        styler = NoteStyler(tintView: tint)
-
-        // Editable text: the full card below the drag strip.
-        // ponytail: no inset for the pill — closed it's a dot in a corner and the text is meant to
-        // blur under it; reserving a line's worth of space for it on every note costs more.
-        editor = NoteEditor(frame: NSRect(x: 4, y: 4, width: w - 8, height: h - strip - 4))
-        glass.addSubview(editor.view)
-
-        pill = NotePill(cardWidth: w, cardHeight: h, styler: styler)
-        glass.addSubview(pill.view)
-
-        window.contentView = glass
         super.init()
         anchor.onChange = { [weak self] in self?.scheduleSave() }
-        glass.onDrag = { [weak self] origin in self?.anchor.dragTo(origin: origin) }
-        glass.onPress = { [weak self] in self?.pill.close() }  // the picker's way out
-        editor.onPress = { [weak self] in self?.pill.close() }
-        editor.onEdit = { [weak self] in self?.scheduleSave() }
-        glass.contextMenu = { [weak self] in self?.buildMenu() }
+        card.onEdit = { [weak self] in self?.scheduleSave() }
+        card.onDelete = { [weak self] in self?.deleteConfirmed() }
+        card.view.onDrag = { [weak self] origin in self?.anchor.dragTo(origin: origin) }
+        card.view.contextMenu = { [weak self] in self?.buildMenu() }
         window.delegate = self
-        pill.onFont = { [weak self] face, commit in self?.choose(family: face, commit: commit) }
-        pill.onColor = { [weak self] color, commit in self?.choose(color: color, commit: commit) }
-        pill.onDelete = { [weak self] in self?.deleteTapped() }
         window.invalidateShadow()
     }
 
@@ -141,8 +84,8 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
         let color = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
-        color.image = Swatch.image(hex: styler.colorHex)
-        color.submenu = paletteMenu.menu(currentHex: styler.colorHex)
+        color.image = Swatch.image(hex: card.styler.colorHex)
+        color.submenu = paletteMenu.menu(currentHex: card.styler.colorHex)
         menu.addItem(color)
         if pinChoices.count >= 2 {
             let pin = NSMenuItem(title: "Pin", action: nil, keyEquivalent: "")
@@ -168,46 +111,11 @@ final class NoteWindow: NSObject, NSWindowDelegate {
         pinCurrent = sender.tag
     }
 
-    // MARK: - Choosing a look
-
-    /// What choosing a typeface means, whether the pill is previewing one under the cursor or
-    /// the user has settled on it. Preview and commit share the exact same rendering path; only
-    /// a commit adopts the face, so leaving a choice restores the note without ever scheduling a
-    /// save. A commit also keeps the caret, which a preview has nothing to put back.
-    private func choose(family face: NoteFont, commit: Bool) {
-        if commit { styler.commitFamily(face) } else { styler.useFamily(face) }
-        editor.reflow(keepCaret: commit)
-        guard commit else { return }
-        pill.refreshDots()
-        scheduleSave()
-    }
-
-    /// The same, for a colour — from a swatch under the cursor, a swatch click, or live from the
-    /// system colour panel behind the card's right-click menu.
-    private func choose(color: NSColor, commit: Bool) {
-        if commit { styler.commitColor(color) } else { styler.showColor(color) }
-        guard commit else { return }
-        pill.refreshDots()
-        scheduleSave()
-    }
-
     // MARK: - Show / hide
 
-    /// A single click on the red dot is the whole delete gesture, so a note with text asks first.
-    private func confirmDelete() -> Bool {
-        guard !editor.isBlank else { return true }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Delete this note?"
-        alert.informativeText = "Its text will be lost."
-        alert.addButton(withTitle: "Delete")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
-    }
-
-    private func deleteTapped() {
-        guard confirmDelete() else { return }
-        let deletion = Note(text: "", dx: anchor.dx, dy: anchor.dy, color: styler.colorHex)
+    /// The card has already asked; this is what saying yes means for a floating note.
+    private func deleteConfirmed() {
+        let deletion = card.deletion(keeping: Note(text: "", dx: anchor.dx, dy: anchor.dy))
         guard saveHandler(deletion) else { return }
         saver.cancel()  // a stale delayed save must not recreate the successfully deleted note
         active = false
@@ -222,12 +130,7 @@ final class NoteWindow: NSObject, NSWindowDelegate {
         self.saveHandler = save
         active = true
         occluded = false  // re-evaluated on the next tracking frame
-        // Loaded before the parse in `editor.load`: it bakes the note's face into the text.
-        styler.load(
-            colorHex: note.color ?? NotePreferences.shared.defaultColorHex,
-            family: note.font.flatMap(NoteFont.init(rawValue:)) ?? .sans)
-        pill.reset()  // the window is reused: never arrive already open
-        editor.load(note.text)
+        card.load(note)
         anchor.begin(note: note, bounds: bounds)
         // Switching between two notes reuses this one window, so pop unconditionally rather than
         // going through applyVisibility — otherwise the incoming note would just teleport in.
@@ -263,7 +166,7 @@ final class NoteWindow: NSObject, NSWindowDelegate {
 
     func focusForEditing() {
         window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(editor.textView)
+        card.focus(in: window)
     }
 
     // MARK: - Pop animation
@@ -326,14 +229,13 @@ final class NoteWindow: NSObject, NSWindowDelegate {
 
     // MARK: - Saving
 
-    /// The one place a whole note is assembled: what it says, where it sits, and how it looks.
-    /// Each part owns only its own slice, so nothing below this class can build one.
+    /// The one place a whole note is assembled: the card says what it says and how it looks,
+    /// this adds where it sits — neither half can build one alone.
     private func scheduleSave() {
-        let note = Note(
-            text: editor.markdown, dx: anchor.dx, dy: anchor.dy, color: styler.colorHex,
-            font: styler.family.rawValue,
+        let note = card.note(keeping: Note(
+            text: "", dx: anchor.dx, dy: anchor.dy,
             // intended size, not the capped one
-            w: Double(anchor.desired.width), h: Double(anchor.desired.height))
+            w: Double(anchor.desired.width), h: Double(anchor.desired.height)))
         // snapshot: an in-flight save must use the handler — and level — of the note it was
         // scheduled for, not whichever note is showing 0.5s later
         let save = saveHandler

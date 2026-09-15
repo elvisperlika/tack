@@ -41,13 +41,9 @@ final class HoverPill: NSVisualEffectView {
     override func mouseExited(with event: NSEvent) { onHover?(false) }
 }
 
-/// One face in the font picker. Its image widens from "T" to "Tack" on hover.
+/// One face in the font picker, wearing its own "T".
 final class FontChoiceButton: HoverButton {
     var face = NoteFont.sans
-    var narrow = NSImage()
-    var wide = NSImage()
-    var expanded = false { didSet { image = expanded ? wide : narrow } }
-    var width: CGFloat { (expanded ? wide : narrow).size.width }
 }
 
 /// A palette swatch button that carries its hex value.

@@ -111,3 +111,47 @@ final class LevelBox {
     var value: Int
     init(_ value: Int) { self.value = value }
 }
+
+// MARK: - Naming a stored note
+
+/// Human wording for a note's storage key, for any UI that lists notes away from the app they
+/// belong to. Pure apart from the bundle-ID lookup, so it can be tested without a window.
+extension Container {
+    /// "Finder — Projects", "Chrome — example.com/page", "Preview — Report.pdf".
+    static func label(for key: String) -> String {
+        let parts = key.components(separatedBy: "|")
+        let app = appName(bundleID: parts[0])
+        let rest = parts.dropFirst().map(detail).joined(separator: " › ")
+        return rest.isEmpty ? app : "\(app) — \(rest)"
+    }
+
+    /// Which scope the key attaches to. ponytail: the key doesn't record its level, so this is
+    /// inferred from the bundle ID — store the level beside the note if a third tab-style app
+    /// ever needs telling apart.
+    static func scopeName(for key: String) -> String {
+        let parts = key.components(separatedBy: "|")
+        guard parts.count > 1 else { return "App" }
+        if parts[0] == FinderContainer.bundleID { return "Folder" }
+        if BrowserContainer.bundleIDs.contains(parts[0]) { return "Tab" }
+        if parts[0] == TerminalContainer.bundleID { return "Tab" }
+        return "Window"
+    }
+
+    /// The app's own name, or the bundle ID verbatim when it isn't installed — a note outlives
+    /// the app it was written on.
+    static func appName(bundleID: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        else { return bundleID }
+        let name = FileManager.default.displayName(atPath: url.path)
+        // displayName keeps the extension when Finder is set to show all of them.
+        return name.hasSuffix(".app") ? String(name.dropLast(4)) : name
+    }
+
+    /// A path component as a person would read it: folders and ttys by their last component,
+    /// URLs without the scheme, window titles as they are.
+    private static func detail(_ part: String) -> String {
+        if part.hasPrefix("/") { return (part as NSString).lastPathComponent }
+        guard let url = URLComponents(string: part), let host = url.host else { return part }
+        return host + (url.path == "/" ? "" : url.path)
+    }
+}
