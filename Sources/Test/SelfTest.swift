@@ -31,6 +31,8 @@ enum SelfTest {
         markdownInlineClosing()
         blockStyleAtCaret()
         blockNavigation()
+        blockTreeStructure()
+        blockTreeRejectsInvalidOperations()
         backspaceAtTheEnd()
         noteSizeIsOptional()
         urlNormalization()
@@ -38,6 +40,125 @@ enum SelfTest {
         fontFaces()
         pillGeometry()
         print("✅ all self-tests passed")
+    }
+
+    static func blockTreeStructure() {
+        // A different content type needs no hierarchy implementation or tree changes.
+        final class TestBlock: Block {
+            let id = UUID()
+        }
+
+        let tree = BlockTree()
+        assert(tree.depthFirst().isEmpty, "a new tree is empty")
+        assert(try! tree.children().isEmpty, "a new tree has no roots")
+        let markdown = "# Title\n\n**body**\n"
+        let first = TextBlock(text: markdown)
+        let second = TextBlock(text: "")
+        let child = TextBlock(text: "child")
+        let sibling = TextBlock(text: "sibling")
+        let grandchild = TestBlock()
+        try! tree.insert(second)
+        try! tree.insert(first, at: 0)
+        try! tree.insert(child, under: first.id)
+        try! tree.insert(sibling, under: first.id, at: 0)
+        try! tree.insert(grandchild, under: child.id)
+
+        assert(try! tree.children().map(\.id) == [first.id, second.id], "roots retain insertion order")
+        assert(try! tree.children(of: first.id).map(\.id) == [sibling.id, child.id], "children are ordered")
+        assert(try! tree.parent(of: first.id) == nil, "a root has no parent")
+        assert(try! tree.parent(of: grandchild.id)?.id == child.id, "grandchildren retain their parent")
+        assert(try! tree.children(of: grandchild.id).isEmpty, "a leaf has no children")
+        assert(tree.depthFirst().map(\.id) == [first.id, sibling.id, child.id, grandchild.id, second.id],
+            "traversal visits ordered subtrees before the next root")
+        assert((tree.block(id: first.id) as? TextBlock) === first, "the tree retains the same object")
+        assert(first.text == markdown && second.text.isEmpty, "Markdown and empty content are preserved")
+        first.text += "updated"
+        assert((tree.block(id: first.id) as? TextBlock)?.text == markdown + "updated",
+            "content edits are visible through the tree")
+
+        try! tree.move(sibling.id, under: first.id, at: 1)
+        assert(try! tree.children(of: first.id).map(\.id) == [child.id, sibling.id],
+            "same-parent indices are measured after removal")
+        try! tree.move(sibling.id, under: first.id, at: 0)
+        try! tree.move(sibling.id, under: first.id)
+        assert(try! tree.children(of: first.id).map(\.id) == [child.id, sibling.id],
+            "an omitted move index appends")
+        try! tree.move(sibling.id, under: first.id, at: 1)
+        assert(try! tree.children(of: first.id).map(\.id) == [child.id, sibling.id],
+            "moving to the current position is valid")
+
+        try! tree.move(child.id, under: second.id)
+        assert(try! tree.children(of: first.id).map(\.id) == [sibling.id], "move detaches from the old parent")
+        assert(try! tree.parent(of: child.id)?.id == second.id, "move updates the parent")
+        assert(try! tree.parent(of: grandchild.id)?.id == child.id, "move carries descendants")
+        try! tree.move(child.id, at: 1)
+        assert(tree.depthFirst().map(\.id) == [first.id, sibling.id, child.id, grandchild.id, second.id],
+            "a subtree can move to the root")
+        assert(try! tree.parent(of: child.id) == nil, "promoted block is a root")
+        assert(try! tree.children(of: second.id).isEmpty, "previous parent becomes a leaf")
+        try! tree.move(second.id, at: 0)
+        assert(try! tree.children().map(\.id) == [second.id, first.id, child.id], "roots can be reordered")
+        try! tree.move(child.id, under: first.id, at: 0)
+        assert(try! tree.children(of: first.id).map(\.id) == [child.id, sibling.id], "roots can become children")
+        try! tree.remove(child.id)
+        assert(tree.block(id: child.id) == nil && tree.block(id: grandchild.id) == nil,
+            "removal deletes the whole subtree")
+        assert(try! tree.children(of: first.id).map(\.id) == [sibling.id], "removal preserves siblings")
+        try! tree.remove(first.id)
+        assert(tree.depthFirst().map(\.id) == [second.id], "root removal includes its descendants")
+        try! tree.remove(second.id)
+        assert(tree.depthFirst().isEmpty, "removing the final root empties the tree")
+    }
+
+    static func blockTreeRejectsInvalidOperations() {
+        let tree = BlockTree()
+        let root = TextBlock(text: "root")
+        let child = TextBlock(text: "child")
+        let leaf = TextBlock(text: "leaf")
+        let other = TextBlock(text: "other")
+        let missing = UUID()
+        try! tree.insert(root)
+        try! tree.insert(other)
+        try! tree.insert(child, under: root.id)
+        try! tree.insert(leaf, under: child.id)
+
+        // Capture ordering, membership, parents, and children to detect partial mutations.
+        func snapshot() -> [[UUID]] {
+            [try! tree.children().map(\.id)] + tree.depthFirst().map { block in
+                let parent = try! tree.parent(of: block.id)
+                let children = try! tree.children(of: block.id)
+                return [block.id] + (parent.map { [$0.id] } ?? []) + children.map(\.id)
+            }
+        }
+
+        func rejects(_ expected: BlockTreeError, _ operation: () throws -> Void) {
+            let before = snapshot()
+            do {
+                try operation()
+                assertionFailure("expected \(expected)")
+            } catch {
+                assert(error as? BlockTreeError == expected, "unexpected error: \(error)")
+            }
+            assert(snapshot() == before, "a rejected operation must leave the tree unchanged")
+        }
+
+        assert(tree.block(id: missing) == nil, "unknown block lookup returns nil")
+        rejects(.missingBlock(missing)) { _ = try tree.children(of: missing) }
+        rejects(.missingBlock(missing)) { _ = try tree.parent(of: missing) }
+        rejects(.duplicateID(root.id)) { try tree.insert(root) }
+        rejects(.duplicateID(root.id)) { try tree.insert(TextBlock(text: "duplicate", id: root.id)) }
+        rejects(.missingBlock(missing)) { try tree.insert(TextBlock(text: "new"), under: missing) }
+        rejects(.invalidIndex(-1)) { try tree.insert(TextBlock(text: "new"), at: -1) }
+        rejects(.invalidIndex(3)) { try tree.insert(TextBlock(text: "new"), at: 3) }
+        rejects(.invalidIndex(2)) { try tree.insert(TextBlock(text: "new"), under: root.id, at: 2) }
+        rejects(.missingBlock(missing)) { try tree.move(missing) }
+        rejects(.missingBlock(missing)) { try tree.move(child.id, under: missing) }
+        rejects(.cyclicMove) { try tree.move(root.id, under: root.id) }
+        rejects(.cyclicMove) { try tree.move(root.id, under: leaf.id) }
+        rejects(.invalidIndex(-1)) { try tree.move(child.id, at: -1) }
+        rejects(.invalidIndex(2)) { try tree.move(root.id, at: 2) }
+        rejects(.invalidIndex(1)) { try tree.move(child.id, under: other.id, at: 1) }
+        rejects(.missingBlock(missing)) { try tree.remove(missing) }
     }
 
     static func appNotesRoundTrip() {
