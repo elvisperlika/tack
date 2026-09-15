@@ -47,6 +47,11 @@ final class NoteGrid: NSObject, NSWindowDelegate {
     /// observer if the two ever sit side by side for long.
     func open() {
         reload()
+        // Tack is an agent (`LSUIElement`), which has no Dock icon and can't properly own a
+        // window. While this one is up it becomes an ordinary app — Dock icon, menu bar, ⌘Tab —
+        // and goes back to being an agent when the window closes. Set before the window is
+        // ordered in, or it comes up behind whatever was frontmost.
+        NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -100,8 +105,12 @@ final class NoteGrid: NSObject, NSWindowDelegate {
         return label
     }
 
-    /// Closing is not quitting: pending edits still have to reach disk.
-    func windowWillClose(_ notification: Notification) { flush() }
+    /// Closing is not quitting: pending edits still have to reach disk, and Tack goes back to
+    /// being a menu-bar agent rather than leaving a Dock icon behind with no window under it.
+    func windowWillClose(_ notification: Notification) {
+        flush()
+        NSApp.setActivationPolicy(.accessory)
+    }
 }
 
 /// Wraps its subviews left to right at whatever width the scroll view hands it, each at the size
