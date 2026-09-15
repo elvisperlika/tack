@@ -30,6 +30,10 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     /// Called after the user deletes the note (so the app can stop tracking it).
     var onDelete: (() -> Void)?
 
+    /// Every edit as it lands, ahead of the debounce that writes it — for anything showing the
+    /// same note live. An empty note is a deletion, the same as everywhere else.
+    var onLiveEdit: ((Note) -> Void)?
+
     private var saveHandler: (Note) -> Bool = { _ in true }  // persists or reports failure
     private var active = false  // current folder has a note to show
     private var occluded = false  // the note's spot on the Finder window is covered
@@ -117,10 +121,21 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     private func deleteConfirmed() {
         let deletion = card.deletion(keeping: Note(text: "", dx: anchor.dx, dy: anchor.dy))
         guard saveHandler(deletion) else { return }
+        onLiveEdit?(deletion)  // so an open dashboard drops it too, rather than showing a ghost
         saver.cancel()  // a stale delayed save must not recreate the successfully deleted note
         active = false
         applyVisibility()
         onDelete?()
+    }
+
+    /// Adopt a version of this note edited somewhere else — the dashboard. `NoteEditor.load` is
+    /// programmatic and fires no textDidChange, so this can't echo back out through `onLiveEdit`.
+    /// The pending save is dropped rather than merged: it is older than what just arrived, and
+    /// whoever sent this is the one persisting it.
+    func applyLive(_ note: Note) {
+        guard active else { return }
+        saver.cancel()
+        card.load(note)
     }
 
     /// Show `note`, positioned relative to the tracked window's top-left; `save` persists edits.
@@ -238,6 +253,7 @@ final class NoteWindow: NSObject, NSWindowDelegate {
             w: Double(anchor.desired.width), h: Double(anchor.desired.height)))
         // snapshot: an in-flight save must use the handler — and level — of the note it was
         // scheduled for, not whichever note is showing 0.5s later
+        onLiveEdit?(note)  // the screen keeps up with the typing; the disk waits for a pause
         let save = saveHandler
         saver.call { save(note) }
     }

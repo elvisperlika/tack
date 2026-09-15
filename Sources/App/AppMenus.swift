@@ -54,7 +54,7 @@ extension AppDelegate {
     /// a debounce behind the disk the grid is about to read.
     @objc func openTack() {
         note.flushPendingSave()
-        grid.open()
+        openGrid()
     }
 
     /// Terminates Tack through AppKit, which first asks the app delegate to flush pending saves.

@@ -5,9 +5,9 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let note = NoteWindow()
     private var statusItem: NSStatusItem?
-    /// The Tack window — every note at once. Built on first open, so quitting without ever
-    /// opening it never constructs one.
-    lazy var grid = NoteGrid { [weak self] error in self?.reportPersistenceError(error) }
+    /// The Tack window — every note at once. Nil until it is first opened, so a session that
+    /// never opens it never builds a window.
+    private(set) var grid: NoteGrid?
     private var pollTimer: Timer?  // slow: which surface is focused (~0.4s)
     private var trackLink: CADisplayLink? {  // vsync glue: the shown note follows its window
         didSet { oldValue?.invalidate() }  // an outlived link would keep firing
@@ -15,6 +15,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastPersistenceError: String?
 
     var current: Container?
+
+    /// The storage key of the note on screen. A closure, not a string: a pin change moves the
+    /// note to another level, and the key has to move with it.
+    private var shownKey: (() -> String)?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = makeStatusItem()
@@ -28,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        note.flushPendingSave() && grid.flush() ? .terminateNow : .terminateCancel
+        note.flushPendingSave() && (grid?.flush() ?? true) ? .terminateNow : .terminateCancel
     }
 
     // MARK: - Target resolution
@@ -113,6 +117,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.persist { try container.write(edited, at: box.value) } ?? false
         }
         guard shown else { return false }
+        // Only an open dashboard cares, and only it knows this note by its storage key.
+        note.onLiveEdit = { [weak self] edited in
+            self?.grid?.update(key: container.key(at: box.value), note: edited)
+        }
+        shownKey = { container.key(at: box.value) }
         let choices = (container.minLevel...container.finestLevel).map {
             (level: $0, label: LevelName.label(level: $0, of: container.path.count))
         }
@@ -143,6 +152,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Builds the Tack window the first time it is asked for, and shows it.
+    func openGrid() {
+        let window = grid ?? NoteGrid { [weak self] error in self?.reportPersistenceError(error) }
+        window.onLiveEdit = { [weak self] key, edited in
+            guard let self, shownKey?() == key else { return }  // a different note: nothing on screen
+            if edited.isDeletion { hideNote() } else { note.applyLive(edited) }
+        }
+        grid = window
+        window.open()
+    }
+
     func reportPersistenceError(_ error: Error) {
         let message = error.localizedDescription
         guard message != lastPersistenceError else { return }
@@ -157,6 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func hideNote() {
         note.hide()
+        shownKey = nil
         stopTracking()
     }
 

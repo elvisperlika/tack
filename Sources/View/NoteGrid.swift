@@ -9,7 +9,11 @@ final class NoteGrid: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let wrap = WrapView()
     private var cells: [NoteGridCell] = []
+    private var placeholder: NSTextField?
     private let onError: (Error) -> Void
+
+    /// An edit made in the dashboard, as it lands — for the floating note showing the same one.
+    var onLiveEdit: ((String, Note) -> Void)?
 
     init(onError: @escaping (Error) -> Void) {
         self.onError = onError
@@ -60,7 +64,7 @@ final class NoteGrid: NSObject, NSWindowDelegate {
         flush()  // a discarded cell's pending save must not land on top of what we're about to read
         cells.forEach { $0.removeFromSuperview() }
         cells = []
-        wrap.subviews.forEach { $0.removeFromSuperview() }
+        setPlaceholder(false)
 
         let stored: [StoredNote]
         do {
@@ -70,18 +74,39 @@ final class NoteGrid: NSObject, NSWindowDelegate {
             return
         }
         guard !stored.isEmpty else {
-            wrap.addSubview(Self.emptyLabel())
+            setPlaceholder(true)
             wrap.needsLayout = true
             return
         }
-        for note in stored {
-            let cell = NoteGridCell(stored: note)
-            cell.onError = onError
-            cell.onDelete = { [weak self] cell in self?.drop(cell) }
-            cells.append(cell)
-            wrap.addSubview(cell)
-        }
+        stored.forEach { add(NoteGridCell(stored: $0)) }
         wrap.needsLayout = true
+    }
+
+    /// A note changed in its floating window while the dashboard is up. Keystrokes arrive here
+    /// undebounced, so the cell keeps pace with the typing rather than with the disk.
+    ///
+    /// ponytail: text, colour and face follow; a resize doesn't — the cell keeps the size it was
+    /// built at until the next reload. Reframing mid-type would reflow the whole grid under the
+    /// cursor, which is worse than a stale size.
+    func update(key: String, note: Note) {
+        if let cell = cells.first(where: { $0.key == key }) {
+            guard !note.isDeletion else { return drop(cell) }
+            cell.apply(note)
+            return
+        }
+        // A note made after the dashboard was opened. Showing nothing would be a quiet lie.
+        guard !note.isDeletion else { return }
+        add(NoteGridCell(stored: StoredNote(key: key, note: note)))
+        wrap.needsLayout = true
+    }
+
+    private func add(_ cell: NoteGridCell) {
+        cell.onError = onError
+        cell.onDelete = { [weak self] cell in self?.drop(cell) }
+        cell.onLiveEdit = { [weak self] key, note in self?.onLiveEdit?(key, note) }
+        setPlaceholder(false)
+        cells.append(cell)
+        wrap.addSubview(cell)
     }
 
     /// Write out anything still sitting in a cell's debounce — on quit, and before a reload.
@@ -94,15 +119,24 @@ final class NoteGrid: NSObject, NSWindowDelegate {
     private func drop(_ cell: NoteGridCell) {
         cells.removeAll { $0 === cell }
         cell.removeFromSuperview()
-        if cells.isEmpty { wrap.addSubview(Self.emptyLabel()) }
+        setPlaceholder(cells.isEmpty)
         wrap.needsLayout = true
     }
 
-    private static func emptyLabel() -> NSTextField {
+    /// Kept as a field rather than found by type: cells hold labels of their own, and picking the
+    /// placeholder back out of `wrap.subviews` would be guesswork.
+    private func setPlaceholder(_ visible: Bool) {
+        if !visible {
+            placeholder?.removeFromSuperview()
+            placeholder = nil
+            return
+        }
+        guard placeholder == nil else { return }
         let label = NSTextField(labelWithString: "No notes yet — add one from the menu bar.")
         label.textColor = .secondaryLabelColor
         label.sizeToFit()
-        return label
+        wrap.addSubview(label)
+        placeholder = label
     }
 
     /// Closing is not quitting: pending edits still have to reach disk, and Tack goes back to
@@ -151,11 +185,14 @@ private final class NoteGridCell: NSView {
     private static let headerGap: CGFloat = 4
 
     private let card: NoteCard
-    private let stored: StoredNote
+    private var stored: StoredNote
     private let saver = Debouncer(delay: 0.5)  // one per cell: a shared one would cancel its peers
 
     var onError: (Error) -> Void = { _ in }
     var onDelete: (NoteGridCell) -> Void = { _ in }
+    var onLiveEdit: (String, Note) -> Void = { _, _ in }
+
+    var key: String { stored.key }
 
     init(stored: StoredNote) {
         self.stored = stored
@@ -207,6 +244,7 @@ private final class NoteGridCell: NSView {
 
     private func scheduleSave() {
         let edited = card.note(keeping: stored.note)  // placement comes back untouched
+        onLiveEdit(stored.key, edited)  // the floating note keeps pace; the disk waits for a pause
         let stored = stored
         saver.call { [weak self] in
             do {
@@ -221,14 +259,25 @@ private final class NoteGridCell: NSView {
 
     @discardableResult func flush() -> Bool { saver.flush() }
 
+    /// Adopt a version of this note that came from somewhere else — the floating window. Any
+    /// pending save is dropped rather than merged: it is older than what just arrived, and one
+    /// note can't be typed in two places at once.
+    func apply(_ note: Note) {
+        saver.cancel()
+        stored.note = note
+        card.load(note)
+    }
+
     private func deleteConfirmed() {
+        let deletion = card.deletion(keeping: stored.note)
         do {
-            try stored.save(card.deletion(keeping: stored.note))
+            try stored.save(deletion)
         } catch {
             onError(error)
             return
         }
         saver.cancel()  // a stale delayed save must not recreate the note that just went
+        onLiveEdit(stored.key, deletion)  // and its floating twin goes with it
         onDelete(self)
     }
 }
