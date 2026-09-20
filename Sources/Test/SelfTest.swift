@@ -222,6 +222,15 @@ enum SelfTest {
         assert(Container.scopeName(for: "com.google.Chrome|https://example.com") == "Tab", "browsers pin to tabs")
         assert(Container.scopeName(for: "com.apple.Terminal|/dev/ttys003") == "Tab", "terminals pin to tabs")
         assert(Container.scopeName(for: ghost + "|Draft") == "Window", "everything else pins to windows")
+
+        assert(Container.revealTarget(for: FinderContainer.bundleID + "|/Users/me") == .folder("/Users/me"),
+            "a Finder note opens its folder")
+        assert(Container.revealTarget(for: "com.google.Chrome|title|https://example.com/page")
+            == .url(URL(string: "https://example.com/page")!), "a tab note opens its page")
+        assert(Container.revealTarget(for: "com.apple.Terminal|/dev/ttys003") == .app,
+            "a tty is a path, not a page — Terminal just comes forward")
+        assert(Container.revealTarget(for: ghost + "|Draft") == .app, "a window note just raises its app")
+        assert(Container.revealTarget(for: ghost) == .app, "an app note raises its app")
     }
 
     static func appNotesRoundTrip() {

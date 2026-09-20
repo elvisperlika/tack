@@ -181,7 +181,6 @@ private final class WrapView: NSView {
 
 /// One note in the grid: where it lives, above a live card of it.
 private final class NoteGridCell: NSView {
-    private static let headerHeight: CGFloat = 16
     private static let headerGap: CGFloat = 4
 
     private let card: NoteCard
@@ -198,17 +197,20 @@ private final class NoteGridCell: NSView {
         self.stored = stored
         let size = Self.size(of: stored.note)
         card = NoteCard(size: size, blending: .withinWindow)
+        let header = Self.header(for: stored.key, width: size.width - 4)
         super.init(
             frame: NSRect(
                 x: 0, y: 0, width: size.width,
-                height: size.height + Self.headerHeight + Self.headerGap))
+                height: size.height + header.frame.height + Self.headerGap))
 
         // ponytail: a note whose text overflows scrolls itself before the grid does — AppKit
         // only chains to the outer scroller once the inner one is at its end. Lives with it.
         card.view.frame = NSRect(origin: .zero, size: size)
         card.view.autoresizingMask = []  // cells don't resize; the note keeps the size it has
         addSubview(card.view)
-        addSubview(header())
+        header.setFrameOrigin(NSPoint(x: 2, y: size.height + Self.headerGap))
+        header.onOpen = { [key = stored.key] in Container.reveal(key: key) }
+        addSubview(header)
         card.load(stored.note)
         card.onEdit = { [weak self] in self?.scheduleSave() }
         card.onDelete = { [weak self] in self?.deleteConfirmed() }
@@ -225,18 +227,17 @@ private final class NoteGridCell: NSView {
         return NSSize(width: max(w, floor.width), height: max(h, floor.height))
     }
 
-    /// Which app, and which window, tab or folder inside it. The full key is the tooltip: a URL
-    /// is longer than any card is wide.
-    private func header() -> NSTextField {
-        let text = "\(Container.scopeName(for: stored.key)) · \(Container.label(for: stored.key))"
-        let label = NSTextField(labelWithString: text)
-        label.font = .systemFont(ofSize: 11)
-        label.textColor = .secondaryLabelColor
-        label.lineBreakMode = .byTruncatingTail
-        label.toolTip = stored.key
-        label.frame = NSRect(
-            x: 2, y: bounds.height - Self.headerHeight, width: bounds.width - 4,
-            height: Self.headerHeight)
+    /// Which app, and which window, tab or folder inside it — wrapped over as many lines as the
+    /// path needs, so none of it ends in an ellipsis. The full key stays the tooltip.
+    private static func header(for key: String, width: CGFloat) -> PathLabel {
+        let text = "\(Container.scopeName(for: key)) · \(Container.label(for: key))"
+        let label = PathLabel(wrappingLabelWithString: text)
+        label.isSelectable = false  // the whole line is one click target, not selectable text
+        label.toolTip = key + "\n⌘-click to open it"
+        label.attributedStringValue = PathLabel.styled(text, asLink: false)
+        let bounds = NSRect(x: 0, y: 0, width: width, height: .greatestFiniteMagnitude)
+        let height = label.cell?.cellSize(forBounds: bounds).height ?? 16
+        label.frame = NSRect(x: 2, y: 0, width: width, height: ceil(height))
         return label
     }
 
@@ -279,5 +280,75 @@ private final class NoteGridCell: NSView {
         saver.cancel()  // a stale delayed save must not recreate the note that just went
         onLiveEdit(stored.key, deletion)  // and its floating twin goes with it
         onDelete(self)
+    }
+}
+
+/// The header line, as a link: hold ⌘ over it and it turns blue and underlined, ⌘-click and the
+/// app, tab or folder the note lives on comes forward.
+///
+/// ⌘ is watched with a local monitor rather than `flagsChanged`, which only reaches the first
+/// responder — a label in a grid never is one. The monitor exists only while the mouse is
+/// actually over this label, so at most one is installed at a time.
+private final class PathLabel: NSTextField {
+    var onOpen: () -> Void = {}
+
+    private var monitor: Any?
+    private var armed = false {
+        didSet {
+            guard armed != oldValue else { return }
+            attributedStringValue = Self.styled(stringValue, asLink: armed)
+            armed ? NSCursor.pointingHand.push() : NSCursor.pop()
+        }
+    }
+
+    static func styled(_ text: String, asLink: Bool) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byCharWrapping  // a URL has no spaces to break at
+        var attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .paragraphStyle: paragraph,
+            .foregroundColor: asLink ? NSColor.linkColor : NSColor.secondaryLabelColor,
+        ]
+        if asLink { attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+        return NSAttributedString(string: text, attributes: attrs)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(
+            NSTrackingArea(
+                rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        armed = event.modifierFlags.contains(.command)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.armed = event.modifierFlags.contains(.command)
+            return event
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        armed = false
+        stopWatching()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard event.modifierFlags.contains(.command) else { return super.mouseDown(with: event) }
+        onOpen()
+    }
+
+    /// The grid drops cells without the mouse ever leaving them — on a reload, or when a note is
+    /// deleted out from under the pointer — so the monitor and the cursor are unwound here too.
+    private func stopWatching() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+
+    deinit {
+        if armed { NSCursor.pop() }
+        stopWatching()
     }
 }

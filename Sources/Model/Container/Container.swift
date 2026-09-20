@@ -147,6 +147,50 @@ extension Container {
         return name.hasSuffix(".app") ? String(name.dropLast(4)) : name
     }
 
+    /// What clicking a note's header should bring forward. Pure, so the choice can be tested
+    /// without opening anything.
+    enum RevealTarget: Equatable {
+        case folder(String)  // a Finder window on this path
+        case url(URL)  // this page, in the browser the note was written on
+        case app  // just bring the app forward
+    }
+
+    static func revealTarget(for key: String) -> RevealTarget {
+        let parts = key.components(separatedBy: "|")
+        if parts[0] == FinderContainer.bundleID, parts.count > 1 { return .folder(parts[1]) }
+        // The finest component is a URL only for browser tabs; a Terminal tty also starts with
+        // a slash, which is why this tests the scheme rather than the shape.
+        if let last = parts.dropFirst().last, let url = URL(string: last),
+            url.scheme?.hasPrefix("http") == true {
+            return .url(url)
+        }
+        return .app
+    }
+
+    /// Bring the surface a note belongs to back to the front. The note follows on its own: the
+    /// poll notices the focus change and shows whatever is pinned there.
+    ///
+    /// ponytail: a browser gets the URL (its own tab if it already has one, a new tab if not)
+    /// and everything else just comes forward — picking a particular window or Terminal tab
+    /// needs AX or an Apple event per app. Add that if landing on the wrong one starts to sting.
+    @discardableResult static func reveal(key: String) -> Bool {
+        let bundleID = key.components(separatedBy: "|")[0]
+        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        else { return false }  // the app is gone; the note outlived it
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        switch revealTarget(for: key) {
+        case .folder(let path):
+            NSWorkspace.shared.open(
+                [URL(fileURLWithPath: path)], withApplicationAt: app, configuration: config)
+        case .url(let url):
+            NSWorkspace.shared.open([url], withApplicationAt: app, configuration: config)
+        case .app:
+            NSWorkspace.shared.openApplication(at: app, configuration: config)
+        }
+        return true
+    }
+
     /// A path component as a person would read it: folders and ttys by their last component,
     /// URLs without the scheme, window titles as they are.
     private static func detail(_ part: String) -> String {
