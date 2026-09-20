@@ -7,15 +7,14 @@
 Sticky notes that stick to windows, not your desktop.
 
 <p align="center">
-  <img src="images/example.gif" alt="Tack in finder" width="800">
+  <img src="images/example2.png" alt="A note pinned to a Finder folder" width="800">
 </p>
 
-Tack is a tiny macOS menu-bar app. Pin a note to a Finder folder or to any app window — the note follows the window as it moves, stays inside its bounds, and reappears when you come back to that window.
+Tack is a small macOS menu-bar app. Pin a note to a Finder folder or to any app window: the note follows that window as it moves, stays inside its bounds, and comes back when you do.
 
-- **Finder folders:** the note is saved as a hidden `.tack.json` *inside the folder*, so it travels with the folder when you move or copy it.
-- **Other app windows:** notes are kept in a central store, keyed to the window — or to the tab, in Chrome/Safari/Arc (by URL) and Terminal (by tty), so each tab can carry its own note.
+A Finder note is saved as a hidden `.tack.json` inside the folder, so it travels with the folder when you move or copy it. Every other note lives in a central store keyed to the window, or to the tab in Chrome/Safari/Arc (by URL) and Terminal (by tty), so each tab can carry its own.
 
-No dock icon, no Electron, no dependencies — just AppKit and the Accessibility API.
+No dock icon, no Electron, no dependencies. Just AppKit and the Accessibility API.
 
 ## Why Tack?
 
@@ -26,20 +25,20 @@ Plenty of apps let you write a note. Almost none let you stick it *to* something
 | Sticks to a specific window or folder | ✅ | ❌ floats on the desktop | ❌ lives in its own app | ✅ folder metadata | ❌ floats on the desktop |
 | Follows the window, appears only in context | ✅ | ❌ always visible | ❌ | ❌ buried in Get Info | ❌ always visible |
 | Per-tab notes (browser URL, Terminal tty) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Note travels with its folder when moved or copied | ✅ | — | — | ⚠️ xattr, easily lost | — |
+| Note travels with its folder when moved or copied | ✅ | n/a | n/a | ⚠️ xattr, easily lost | n/a |
 | Markdown | ✅ | ❌ | ✅ | ❌ | varies |
 | Footprint | menu-bar agent, zero dependencies | built-in | built-in | built-in | usually Electron |
-| Free & open source | ✅ | ❌ | ❌ | — | rarely |
+| Free & open source | ✅ | ❌ | ❌ | n/a | rarely |
 
-If you just want a scratchpad, Stickies is fine. Tack is for notes that belong to a *place* — this folder, this PDF, this tab — and should show up exactly there, and nowhere else.
+If you want a scratchpad, Stickies is fine. Tack is for notes that belong to a place: this folder, this PDF, this tab, and nowhere else.
 
 ## Install
 
-Grab the zip for your Mac from the [latest release](../../releases/latest) — `apple-silicon` for M-series, `intel` for Intel — unzip, and **right-click → Open** the first time.
+Grab the zip for your Mac from the [latest release](../../releases/latest), `apple-silicon` for M-series or `intel` for Intel, unzip it, and right-click → Open the first time.
 
-Why the right-click: releases are built by GitHub's CI, which has no Apple Developer certificate, so the app is ad-hoc signed and not notarized. Gatekeeper flags it as from an "unidentified developer" — right-click → Open is the built-in way past that warning, needed once per download. Same cause, second symptom: macOS ties permission grants to the app's signature, and an ad-hoc signature is unique per build, so after downloading an update macOS will re-ask for the permissions below. Everything else — your notes included — carries over untouched.
+Releases are built by GitHub's CI, which has no Apple Developer certificate, so the app is ad-hoc signed and not notarized. Gatekeeper calls it an "unidentified developer", and right-click → Open is the built-in way past that warning, once per download. Same cause, second symptom: an ad-hoc signature is unique per build and macOS ties permission grants to it, so after an update macOS re-asks for the permissions below. Everything else, your notes included, carries over untouched.
 
-Building from source avoids both, if you have any codesigning identity in your keychain (`bundle.sh` picks the first one, and keeps the signature — and the permission grants — stable across rebuilds):
+Building from source avoids both if you have any codesigning identity in your keychain. `bundle.sh` picks the first one and keeps the signature stable across rebuilds, and the permission grants with it:
 
 ```sh
 git clone <repo-url>
@@ -47,24 +46,39 @@ cd tack
 ./bundle.sh && open Tack.app
 ```
 
-Requires macOS 14+ and Xcode command-line tools.
+Requires macOS 14+ and the Xcode command-line tools.
 
-On first launch, macOS asks for permission to control Finder (and later Terminal, for tab notes) and for Accessibility access (needed to track app windows). Grant both; the 📌 appears in the menu bar.
+On first launch macOS asks to control Finder (and later Terminal, for tab notes) and for Accessibility access, which is how Tack tracks app windows. Grant both and the 📌 appears in the menu bar.
 
 ## Use
 
 1. Focus a Finder folder or any app window.
-2. Click 📌 → **Add note here**. The note appears in the middle of that window.
-3. Type. Drag the note where you want it — it stays glued to that window, and it can't leave it: dragging toward an edge stops the note at the border. Drag any edge to resize it; that edge stops at the window's border too, so growing the note into the border cuts it there instead of pushing the opposite edge out. The size is saved with the note and capped to the window — shrink the window below the note and the note shrinks to fit rather than spilling over, then grows back when the window does.
+2. Click 📌 → Add note here. The note appears in the middle of that window.
+3. Type. Drag the note where you want it. It can't leave the window: dragging or resizing toward an edge stops dead at the border, and a note pinned to a window smaller than itself shrinks to fit, then grows back when the window does.
 
-Notes edit like Notion, in blocks: every line is one, Enter opens the next, the arrows walk between them, and each keeps its own style — type in the middle *or* at the head of an H1 and it stays H1. **Esc** steps out of the text and selects the block you were in (a light grey wash); ↑/↓ then walk block by block, and **Enter** — or just typing — drops you back in at the end of the selected one. Backspace deletes the selected block and keeps you in block mode, the selection landing on the one above — or on whatever slides up into its place, if you deleted the first; ⌘Z brings it back. Type `**bold**`, `*italic*`, `` `code` ``, `~~strike~~` or a `#`/`##`/`###` heading and the markup is consumed — you see the formatting, not the symbols, even while editing. ⌘B/⌘I toggle emphasis; backspace at the start of a heading turns it back into body text. Lists work the same way: `- ` becomes a bullet (•) and `[]`/`[x]` a checkbox (☐/☑) — click to tick, Enter continues the list, and Enter on an empty item or backspace at its start leaves the list. On disk a note is plain markdown (`- `, `- [ ]`, `- [x]`), so nothing about the file format changed and older notes just work.
+Notes edit in blocks, the way Notion does. Every line is a block, Enter opens the next, the arrows walk between them, and each keeps its own style, so typing at the head of an H1 stays H1. Esc steps out of the text and selects the block you were in; ↑/↓ then walk block by block, and Enter or just typing drops you back in. Backspace deletes the selected block and selects the one above it, and ⌘Z brings it back.
 
-A small glass dot sits in the note's top-right corner. Put the cursor on it and it opens leftwards into a pill of three dots — it floats over the text the way iOS's new bars do, the words blurring under it, and closes again the moment the cursor leaves, so a note you're only reading wears nothing but the dot. The first is a **T** set in the note's typeface, the second wears the note's own colour: click either and the pill widens again, the three dots giving way to the choices themselves — Notion's three faces (sans, the system face; serif, New York; mono) or the palette's colours, each as its own dot. Rest on a face and its dot opens out to finish the word, *Tack* set in that very face, so you read the typeface before you choose it. Pick one and the pill snaps back to three. A picker stays up once opened, cursor on it or not — it's a question already asked; clicking the card is what drops it unanswered. No menu, no popover — the pill *is* the picker. The red dot, last, deletes the note (a note with text asks first; emptying its text still removes it too).
+Type `**bold**`, `*italic*`, `` `code` ``, `~~strike~~` or a `#`/`##`/`###` heading and the markup is consumed: you see the formatting, not the symbols, even while editing. ⌘B and ⌘I toggle emphasis, and backspace at the start of a heading turns it back into body text. `- ` becomes a bullet (•) and `[]`/`[x]` a checkbox (☐/☑) you can click to tick. On disk a note is plain markdown.
 
-The rest is a right-click on the card:
+<p align="center">
+  <img src="images/example4.png" alt="Headings, bullets and checkboxes in a folder note" width="49%">
+  <img src="images/example1.png" alt="Bold, monospaced code and strikethrough in a note on a PDF window" width="49%">
+</p>
 
-- **Color** — the swatch grid, which is where the pill's colours come from (and the whole palette, if it outgrew the note's width). The palette starts with four (yellow, pink, blue, white) and grows via "+"; a tiny × on each swatch's corner removes it (the last colour can't be removed).
-- **Pin** — how widely the note shows: **this window / this app**, and **this tab** in Chrome/Safari/Arc and Terminal. The entry only appears when there's a choice to make — Finder notes have no levels (they live in the folder itself).
+A small glass dot sits in the note's top-right corner. Put the cursor on it and it opens leftwards into a pill of three dots, floating over the blurred text, and closes again when the cursor leaves. The first dot is a T in the note's typeface, the second wears its colour: click either and the pill widens into the choices, three faces (the system sans, New York serif, mono) or the palette's colours. Rest on a face and its dot opens out to spell *Tack* in that face, so you read the typeface before you pick it. A picker stays up once opened; clicking the card drops it. The red dot deletes the note, and one with text asks first.
+
+<p align="center">
+  <img src="images/example3.png" alt="A note in a different typeface and colour" width="800">
+</p>
+
+Right-click the card for the rest. Color opens the full swatch grid the pill's colours come from: four to start (yellow, pink, blue, white), "+" adds one, and a tiny × removes one, though the last colour stays. Pin sets how widely the note shows, this window or this app, plus this tab in Chrome/Safari/Arc and Terminal. Pin only appears when there's a choice to make, since Finder notes live in the folder itself and have no levels.
+
+Click 📌 → Open Tack (⌘O) to see every note at once, each card under the window, tab or folder it's pinned to. The cards are live: edit one here or on its own window and the other keeps up as you type. ⌘-click a card's header and that window, tab or folder comes back to the front.
+
+<p align="center">
+  <img src="images/video.gif" alt="Editing a note in the Tack window and on its Finder folder at the same time" width="800">
+  <img src="images/example5.png" alt="The Tack window showing every note, grouped by where it lives" width="800">
+</p>
 
 ## Development
 
@@ -78,33 +92,26 @@ swift run swift-executable --selftest   # run the built-in checks
 
 Tack is one process with two loops and a couple of JSON files.
 
-A slow timer fires every 0.4 seconds and asks macOS which app is frontmost. That decides what the note should attach to:
+A slow timer fires every 0.4 seconds and asks macOS which app is frontmost, which decides what the note attaches to. For Finder, one Apple event asks which folder is in front (the window's position comes from the window list, not the event), and the note lives in that folder's hidden `.tack.json`, which is why it survives being moved, copied or synced to another Mac. For any other app, Tack finds the focused window through the Accessibility API and looks the note up in a central store keyed to that window.
 
-- If it's Finder, Tack sends a single Apple event asking which folder is in front (the window's position comes from the window list, not the event). The note for that folder lives in a hidden `.tack.json` inside the folder itself, which is why it survives the folder being moved, copied, or synced to another Mac.
-- If it's any other app, Tack finds the focused window through the Accessibility API and looks the note up in a central store keyed to that window.
-
-Keeping the note glued to its window is the second loop. While a note is showing, Tack reads the window's position on a display link — a timer synced to the screen's own refresh — and repositions the note to match. That's the full rate on a 120 Hz ProMotion display, so the note tracks in lockstep during a drag rather than trailing behind. Every surface is polled the same way: app windows can push their own move notifications over the Accessibility API, but macOS coalesces those mid-drag and the note visibly lagged, so polling won out for Finder folders and app windows alike. What gets polled is the window server's own window list — the process compositing the drag, fresh every frame — not the Accessibility API: an accessibility read is a synchronous round-trip into the tracked app's main thread, which is busy handling the drag at exactly the moment it matters, so the note stuttered. Accessibility is only used to *identify* the focused window (its document, title, or URL) on the slow poll, where that latency is harmless.
+The second loop keeps the note glued to its window. While a note is showing, Tack reads the window's position on a display link, a timer synced to the screen's own refresh, and moves the note to match: the full rate on a 120 Hz ProMotion display, so the note tracks in lockstep during a drag. Everything is polled, app windows included, even though they can push move notifications over the Accessibility API, because macOS coalesces those mid-drag and the note visibly lagged. What gets polled is the window server's own window list, fresh every frame from the process compositing the drag. An accessibility read would be a synchronous round-trip into the tracked app's main thread, busy handling the drag at exactly the moment it matters, and the note stuttered. Accessibility only *identifies* the focused window on the slow poll, where that latency is harmless.
 
 ### How a note knows which tab it's on
 
-macOS doesn't tell you "the user is on tab 3". To know what it's looking at, Tack builds an identity for the focused surface — a path from coarse to fine, like `app / window / tab` — and reads each level from a different source:
+macOS doesn't tell you "the user is on tab 3". Tack builds an identity for the focused surface, a path from coarse to fine like `app / window / tab`, and reads each level from a different source:
 
-- **Any app:** the Accessibility API exposes the focused window's document (`AXDocument`) — the file Preview or TextEdit has open — or, failing that, its title (`AXTitle`). A document path is stable: close the file, reopen it next week, the note comes back. A title is just a guess.
-- **Chrome, Safari and Arc:** the window is the wrong identity for a tab — switching tabs mutates the *same* window rather than focusing a new one. So Tack walks the window's accessibility tree down to the web area and reads the page URL, normalised to scheme + host + path (query and fragment are session noise). Each tab *is* its page: the note follows the URL through tab switches, new windows, even a restart.
-- **Terminal:** tab titles churn while commands run, so a title-keyed note would vanish mid-build. The tty (`/dev/ttys003`) is the only identity a tab keeps for its whole life, and one Apple event per poll fetches it.
+- Any app: the Accessibility API exposes the focused window's document (`AXDocument`), the file Preview or TextEdit has open, or failing that its title (`AXTitle`). A document path is stable, so close the file, reopen it next week, and the note comes back. A title is just a guess.
+- Chrome, Safari and Arc: switching tabs mutates the *same* window rather than focusing a new one, so the window is the wrong identity for a tab. Tack walks the window's accessibility tree down to the web area and reads the page URL, normalised to scheme + host + path (query and fragment are session noise). Each tab *is* its page, and the note follows the URL through tab switches, new windows, even a restart.
+- Terminal: tab titles churn while commands run, so a title-keyed note would vanish mid-build. The tty (`/dev/ttys003`) is the only identity a tab keeps for its whole life, and one Apple event per poll fetches it.
 
-Where this works well, and where it degrades, follows from those sources:
+Document-based apps, browser tabs and Terminal tabs are reliable. Everything else is keyed by window title, so two windows with the same title share one note, and a title that changes (an unsaved-marker asterisk, a notification counter, "3 of 10 files") takes its note with it. Browsers not on the URL list, Firefox among them, fall back to title keying, and since a browser's title follows the active tab the note *seems* tab-bound until the page title changes under it. Adding a Chromium or WebKit browser is one bundle ID in `BrowserContainer.bundleIDs`, as long as it exposes its web area over Accessibility. Apps with a broken or empty accessibility tree, some Electron ones, can't hold a note at all.
 
-- **Reliable:** document-based apps (`AXDocument` is a real path), Chrome/Safari/Arc tabs (the URL is explicit), Terminal tabs (the tty is stable).
-- **Fuzzy:** everything else is keyed by window title. Two windows with the same title share one note, and a title that changes — unsaved-marker asterisks, notification counters, "3 of 10 files" — takes its note with it.
-- **Not covered:** browsers not on the URL list (Firefox, ...) degrade to title keying — and since a browser's window title follows the active tab, the note *seems* tab-bound until the page title changes out from under it. Adding a Chromium/WebKit browser is one bundle ID in `BrowserContainer.bundleIDs`, as long as it exposes its web area over Accessibility. Apps with a broken or empty accessibility tree (some Electron apps) may expose nothing to key on and can't hold a note at all.
+Pinning a note to the window or app level sidesteps a fuzzy tab identity. And if a note refuses to stick where you expect, `defaults write com.tack.app debugPaths -bool YES` makes Tack log the identity it sees (watch with `log stream --predicate 'process == "Tack"'`).
 
-Pinning a note to the window or app level — **Pin** in the note's right-click menu — sidesteps a fuzzy tab identity. And if a note refuses to stick where you expect, `defaults write com.tack.app debugPaths -bool YES` makes Tack log the identity it sees (watch with `log stream --predicate 'process == "Tack"'`).
-
-The note itself is a borderless `NSWindow` floating above everything else — a frosted-glass card (`NSVisualEffectView` blurring whatever sits behind it) with the palette colour laid over as a sheer tint. Its position is stored as an offset from the tracked window's top-left corner, clamped *before* every move — Tack drives the drag itself rather than letting AppKit move the window and pulling it back after, so the note stops dead at the window's border instead of escaping and snapping back — and its size is capped to the window too, so a note pinned to a small window shrinks to fit instead of spilling over, and grows back toward its saved size when the window does. The coordinate math (AppleScript measures from the screen's top-left, Cocoa from the bottom-left) lives in pure functions, which is what `--selftest` asserts on without launching any UI.
+The note itself is a borderless `NSWindow` above everything else: a frosted-glass card (`NSVisualEffectView`) with the palette colour laid over as a sheer tint. Its position is an offset from the tracked window's top-left corner, clamped *before* every move, so Tack drives the drag itself rather than letting AppKit move the window and pulling it back after. Its size is capped the same way. The coordinate math (AppleScript measures from the screen's top-left, Cocoa from the bottom-left) lives in pure functions, which is what `--selftest` asserts on without launching any UI.
 
 ⌘C/⌘V/⌘Z work inside a note because of a menu you'll never see: an agent app has no menu bar, but macOS still routes key equivalents through the main menu, so Tack installs an invisible Edit menu purely to give the shortcuts somewhere to land.
 
-Markdown is styled in place rather than rendered. The buffer always holds what you typed — `**milk**` keeps its asterisks — and the styling is attributes painted over the top, with the markers dimmed. Nothing is serialised back, so a note is still a plain string on disk, and anything written before markdown existed opens unchanged. Finding the spans is, again, a pure function the self-tests assert on.
+Markdown is styled in place rather than rendered. The buffer always holds what you typed, `**milk**` keeps its asterisks, and the styling is attributes painted over the top with the markers dimmed. Nothing is serialised back, so a note is still a plain string on disk. Finding the spans is, again, a pure function the self-tests assert on.
 
 Deleting is implicit: empty a note's text and its file, or store entry, is removed.
