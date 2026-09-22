@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tack — notes that stick to the window, not the desktop</title>
+<meta name="description" content="Tack is a macOS menu-bar app. Pin a note to a Finder folder, a document or a browser tab: it follows that window around and shows up only when you're there.">
+<link rel="icon" href="public/icon.png">
+<meta property="og:title" content="Tack — notes that stick to the window, not the desktop">
+<meta property="og:description" content="Pin a note to a Finder folder, a document or a browser tab. It follows that window, and it's only there when you are.">
+<meta property="og:image" content="images/example2.png">
+<script>document.documentElement.className = 'js'</script>
+<style>
+:root {
+  --desk: #d8dade;
+  --desk-deep: #c9ccd2;
+  --ink: #000;
+  --ink-soft: #52565e;
+  --hair: rgba(0,0,0,.14);
+  --yellow: #ffeb73;
+  --pink: #ffb3ba;
+  --blue: #aec6ff;
+  --white: #fff;
+  --sans: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Inter, system-ui, sans-serif;
+  --serif: ui-serif, "New York", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", monospace;
+  --col: 1080px;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --desk: #1b1c1f; --desk-deep: #131417; --ink: #f2f2f4; --ink-soft: #9a9ea7; --hair: rgba(255,255,255,.16); }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: linear-gradient(180deg, var(--desk) 0%, var(--desk-deep) 100%) fixed;
+}
+a { color: inherit; }
+img { max-width: 100%; display: block; }
+:focus-visible { outline: 2px solid #0a6cff; outline-offset: 3px; border-radius: 4px; }
+
+/* the page chrome is a menu bar */
+.menubar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 10px;
+  height: 30px; padding: 0 14px;
+  font-size: 13px; font-weight: 600;
+  background: color-mix(in srgb, var(--desk) 72%, #fff);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--hair);
+}
+@media (prefers-color-scheme: dark) { .menubar { background: color-mix(in srgb, var(--desk) 70%, #000); } }
+.menubar img { width: 16px; height: 16px; border-radius: 4px; }
+.menubar .spacer { flex: 1; }
+.menubar a { text-decoration: none; opacity: .75; font-weight: 500; }
+.menubar a:hover { opacity: 1; }
+
+.wrap { max-width: var(--col); margin: 0 auto; padding: 0 24px; }
+
+/* hero */
+.hero { padding: clamp(64px, 12vh, 130px) 0 clamp(40px, 8vh, 90px); }
+.hero-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 56px; align-items: center; }
+h1 {
+  font-family: var(--serif);
+  font-size: clamp(2.5rem, 6.2vw, 4.4rem);
+  line-height: 1.02;
+  letter-spacing: -.02em;
+  font-weight: 600;
+  margin: 0 0 24px;
+  text-wrap: balance;
+}
+.lede { font-size: clamp(1.05rem, 1.6vw, 1.22rem); color: var(--ink-soft); max-width: 46ch; margin: 0 0 32px; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.btn {
+  display: inline-block; text-decoration: none;
+  padding: 11px 20px; border-radius: 999px;
+  font-size: 15px; font-weight: 600;
+  background: var(--ink); color: var(--desk);
+  border: 1px solid transparent;
+  transition: transform .12s ease;
+}
+.btn:hover { transform: translateY(-1px); }
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--hair); }
+.req { font-size: 14px; color: var(--ink-soft); }
+
+/* the note card, as the app draws it */
+.note {
+  position: relative;
+  border-radius: 14px;
+  padding: 26px 28px 30px;
+  color: #101114;
+  background: var(--white);
+  box-shadow: 0 1px 2px rgba(0,0,0,.10), 0 22px 34px -20px rgba(0,0,0,.45);
+  max-width: 580px;
+  rotate: var(--tilt, 0deg);
+}
+.note.y { background: var(--yellow); }
+.note.p { background: var(--pink); }
+.note.b { background: var(--blue); }
+.note::after {
+  content: ""; position: absolute; top: 14px; right: 14px;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: rgba(255,255,255,.55);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.07);
+}
+.note h2, .note h3 {
+  font-family: var(--serif);
+  font-weight: 600;
+  letter-spacing: -.01em;
+  margin: 0 0 10px;
+  padding-right: 26px;
+}
+.note h2 { font-size: 1.6rem; line-height: 1.12; }
+.note h3 { font-size: 1.25rem; }
+.note p { margin: 0 0 12px; font-size: 16.5px; }
+.note p:last-child { margin-bottom: 0; }
+.note code { font-family: var(--mono); font-size: .88em; background: rgba(0,0,0,.07); padding: 1px 5px; border-radius: 4px; }
+.note ul { margin: 10px 0 0; padding-left: 20px; }
+.note ul.checks { list-style: none; padding-left: 0; }
+.note li { margin-bottom: 4px; }
+.note .done { text-decoration: line-through; opacity: .5; }
+
+/* where a note lives — the dashboard's own caption line */
+.where {
+  font-size: 12.5px; color: var(--ink-soft);
+  margin: 0 0 10px 6px; letter-spacing: .01em;
+}
+
+/* a pinned feature */
+.bit { padding: clamp(44px, 7vw, 76px) 0 0; }
+.bit .hold { max-width: 580px; }
+.bit:nth-of-type(even) .hold { margin-left: auto; }
+.shots { display: grid; gap: 18px; margin: 30px 0 0; }
+.shots.two { grid-template-columns: 1fr 1fr; }
+.shots img { border-radius: 10px; box-shadow: 0 2px 6px rgba(0,0,0,.12), 0 30px 50px -30px rgba(0,0,0,.6); }
+figure { margin: 0; }
+figcaption { font-size: 13.5px; color: var(--ink-soft); margin-top: 10px; }
+
+/* install */
+.install { padding: clamp(60px, 9vw, 110px) 0 0; }
+.install .note { max-width: 640px; margin: 0 auto; }
+pre {
+  font-family: var(--mono); font-size: 13px; line-height: 1.6;
+  background: rgba(0,0,0,.07); border-radius: 8px;
+  padding: 14px 16px; margin: 16px 0 0;
+  overflow-x: auto;
+}
+.install .actions { margin-top: 20px; }
+.install .btn { background: #101114; color: #fff; }
+
+footer {
+  margin-top: clamp(60px, 10vw, 120px);
+  padding: 28px 0 60px;
+  border-top: 1px solid var(--hair);
+  font-size: 14px; color: var(--ink-soft);
+  display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: baseline;
+}
+footer a { text-decoration-color: var(--hair); }
+footer .spacer { flex: 1; }
+
+/* one gesture: the note drops and settles, the way you'd stick it down */
+@media (prefers-reduced-motion: no-preference) {
+  .js .note { opacity: 0; translate: 0 -22px; rotate: 0deg; scale: 1.05; box-shadow: none;
+              transition: opacity .28s ease, translate .5s cubic-bezier(.16,1.02,.4,1), rotate .5s cubic-bezier(.16,1.02,.4,1), scale .5s cubic-bezier(.16,1.02,.4,1), box-shadow .5s ease; }
+  .js .note.stuck { opacity: 1; translate: 0 0; rotate: var(--tilt, 0deg); scale: 1;
+                    box-shadow: 0 1px 2px rgba(0,0,0,.10), 0 22px 34px -20px rgba(0,0,0,.45); }
+}
+
+@media (max-width: 860px) {
+  .hero-grid { grid-template-columns: 1fr; gap: 40px; }
+  .bit:nth-of-type(even) .hold { margin-left: 0; }
+  .shots.two { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .note { --tilt: 0deg !important; padding: 22px 22px 26px; }
+}
+</style>
+</head>
+<body>
+
+<nav class="menubar">
+  <img src="public/icon.png" alt="">
+  <span>Tack</span>
+  <span class="spacer"></span>
+  <a href="https://github.com/elvisperlika/tack">GitHub</a>
+  <a href="https://github.com/elvisperlika/tack/releases/latest">Download</a>
+</nav>
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <h1>Notes that stick to the window, not the desktop.</h1>
+      <p class="lede">Tack sits in your menu bar. Pin a note to a Finder folder, a PDF or a browser tab, and it follows that window around the screen — only there when you are.</p>
+      <div class="actions">
+        <a class="btn" href="https://github.com/elvisperlika/tack/releases/latest">Download for macOS</a>
+        <a class="btn ghost" href="https://github.com/elvisperlika/tack">Read the source</a>
+        <span class="req">macOS 14+ · free</span>
+      </div>
+    </div>
+    <div>
+      <p class="where">Folder · Finder — Papers</p>
+      <article class="note y" style="--tilt: -2.4deg">
+        <h3>Reading list</h3>
+        <ul class="checks">
+          <li class="done">☑ export the figures</li>
+          <li>☐ skim §3 before Friday</li>
+          <li>☐ email the draft</li>
+        </ul>
+      </article>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="bit">
+    <div class="hold">
+      <p class="where">Window · Preview — thesis.pdf</p>
+      <article class="note p" style="--tilt: 1.6deg">
+        <h2>Pin it where the thought happened</h2>
+        <p>Focus a window, click 📌 → <strong>Add note here</strong>. The note appears in the middle of it. Drag it wherever you want — it can't leave the window, and when the window gets small the note shrinks to fit, then grows back.</p>
+      </article>
+    </div>
+    <figure class="shots">
+      <img src="images/example2.png" alt="A Tack note pinned inside a Finder window, over a PDF in Preview" loading="lazy">
+      <figcaption>A note pinned to a Finder folder, staying inside its window.</figcaption>
+    </figure>
+  </section>
+
+  <section class="bit">
+    <div class="hold">
+      <p class="where">Window · Finder — World</p>
+      <article class="note b" style="--tilt: -1.4deg">
+        <h2>It goes where the window goes</h2>
+        <p>Drag the window and the note comes along, frame for frame. Switch to another app and the note leaves with it. Come back and it's waiting in the same corner you left it.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="bit">
+    <div class="hold">
+      <p class="where">Folder · Finder — /Desktop/World</p>
+      <article class="note y" style="--tilt: 2deg">
+        <h2>A folder note travels with the folder</h2>
+        <p>Notes on a Finder folder are kept inside it. Move the folder, copy it to a drive, sync it to another Mac — the note is still there when you open it.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="bit">
+    <div class="hold">
+      <p class="where">Tab · Safari — developer.apple.com</p>
+      <article class="note" style="--tilt: -1.8deg">
+        <h2>One note per tab</h2>
+        <p>In Chrome, Safari and Arc a note belongs to the page rather than the window, so every tab carries its own and finds it again after a restart. Terminal tabs get the same treatment — a note stays with its tab through the whole session.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="bit">
+    <div class="hold">
+      <p class="where">Window · Preview — 1810.04805v2.pdf</p>
+      <article class="note p" style="--tilt: 1.2deg">
+        <h2>Markdown you can see while you type</h2>
+        <p>Write <code>**bold**</code>, <code>`code`</code> or <code>##</code> and the markers disappear as you go, leaving the formatting behind. <code>- </code> makes a bullet, <code>[]</code> makes a checkbox you can click to tick.</p>
+        <p>Every line is its own block, the way Notion works: Enter starts the next one, the arrows walk between them, Esc steps out to select a whole block, and ⌘Z brings back anything you delete.</p>
+      </article>
+    </div>
+    <div class="shots two">
+      <figure>
+        <img src="images/example4.png" alt="A note with headings, bullets and checkboxes" loading="lazy">
+        <figcaption>Headings, bullets and checkboxes.</figcaption>
+      </figure>
+      <figure>
+        <img src="images/example1.png" alt="A note with bold text, monospaced code and strikethrough" loading="lazy">
+        <figcaption>Bold, code and strikethrough on a PDF window.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="bit">
+    <div class="hold">
+      <p class="where">Window · Tack</p>
+      <article class="note b" style="--tilt: -2.2deg">
+        <h2>Three faces, four colours, one dot</h2>
+        <p>A small glass dot sits in the note's corner. Rest on it and it opens into the pickers: the system sans, New York, or mono — each one spelled out in its own face so you read it before you pick it — and the colours.</p>
+        <p>Right-click the card for the rest: the full swatch grid, where you can add or drop colours, and how widely the note should show — this window, this tab, or everywhere in the app.</p>
+      </article>
+    </div>
+    <figure class="shots">
+      <img src="images/example3.png" alt="A Tack note in a different typeface and colour" loading="lazy">
+      <figcaption>Same note, different face and colour.</figcaption>
+    </figure>
+  </section>
+
+  <section class="bit">
+    <div class="hold">
+      <p class="where">Window · Tack</p>
+      <article class="note y" style="--tilt: 1.7deg">
+        <h2>Every note in one window</h2>
+        <p>📌 → <strong>Open Tack</strong> (⌘O) shows everything you've written, each card under the window, tab or folder it belongs to. Edit one here and it updates on its own window as you type. ⌘-click a card's header and Tack brings that folder or tab back to the front.</p>
+      </article>
+    </div>
+    <div class="shots">
+      <figure>
+        <img src="images/video.gif" alt="Editing a note in the Tack window and on its Finder folder at the same time" loading="lazy">
+        <figcaption>The same note, edited in two places at once.</figcaption>
+      </figure>
+      <figure>
+        <img src="images/example5.png" alt="The Tack window showing every note grouped by where it lives" loading="lazy">
+        <figcaption>Every note, grouped by where it lives.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="install">
+    <article class="note" style="--tilt: -.8deg">
+      <h2>Get it</h2>
+      <p>Grab the zip for your Mac from the latest release — <code>apple-silicon</code> or <code>intel</code> — unzip it, and right-click → Open the first time. The build is signed by a robot rather than a company, so Gatekeeper asks once.</p>
+      <p>On first launch macOS asks for Accessibility access and permission to control Finder. That's how a note keeps up with its window. Grant both and the 📌 shows up in your menu bar.</p>
+      <p>Or build it yourself:</p>
+      <pre>git clone https://github.com/elvisperlika/tack.git
+cd tack &amp;&amp; ./bundle.sh &amp;&amp; open Tack.app</pre>
+      <div class="actions">
+        <a class="btn" href="https://github.com/elvisperlika/tack/releases/latest">Download for macOS</a>
+        <span class="req">macOS 14 or newer</span>
+      </div>
+    </article>
+  </section>
+
+  <footer>
+    <span>No dock icon, no Electron. A pin in the menu bar and that's it.</span>
+    <span class="spacer"></span>
+    <a href="https://github.com/elvisperlika/tack">GitHub</a>
+    <a href="https://github.com/elvisperlika/tack/blob/main/LICENSE">MIT</a>
+  </footer>
+
+</main>
+
+<script>
+const io = new IntersectionObserver((entries) => {
+  for (const e of entries) if (e.isIntersecting) { e.target.classList.add('stuck'); io.unobserve(e.target); }
+}, { threshold: .25, rootMargin: '0px 0px -6% 0px' });
+document.querySelectorAll('.note').forEach(n => io.observe(n));
+</script>
+</body>
+</html>

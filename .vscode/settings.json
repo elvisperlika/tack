@@ -1,6 +1,0 @@
-{
-  "[swift]": {
-    "editor.formatOnSave": true,
-    "editor.defaultFormatter": "swiftlang.swift-vscode"
-  }
-}
