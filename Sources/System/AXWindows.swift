@@ -26,8 +26,17 @@ enum AXWindows {
     /// The frontmost app's focused window element, kept alive to attach AX notifications to.
     static func focusedWindow(pid: pid_t) -> AXUIElement? {
         guard AXIsProcessTrusted() else { return nil }
-        var value: CFTypeRef?
         let app = AXUIElementCreateApplication(pid)
+        if let win = copyFocusedWindow(app) { return win }
+        // Electron apps (Slack, Claude, VS Code…) keep their AX tree off until a client asks
+        // for it through this attribute — Electron's documented switch for assistive tools.
+        // Native apps reject the unknown attribute, which is harmless.
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        return copyFocusedWindow(app)
+    }
+
+    private static func copyFocusedWindow(_ app: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
         guard
             AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value)
                 == .success,
