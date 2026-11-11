@@ -1,5 +1,4 @@
-import CoreGraphics
-import Foundation
+import AppKit
 
 /// Front Finder folder window plus the normal windows stacked above it (for occlusion).
 struct FinderWindowInfo {
@@ -44,7 +43,7 @@ enum FinderWatcher {
     /// nil when nothing lines up (the window moved between the two reads): tracking then falls
     /// back to the frontmost Finder window, as it always did.
     static func windowNumber(near hint: CGRect) -> Int? {
-        for info in windowList() where info[kCGWindowOwnerName as String] as? String == "Finder" {
+        for info in WindowServer.list() where info[kCGWindowOwnerName as String] as? String == "Finder" {
             guard info[kCGWindowLayer as String] as? Int == 0,
                 let b = info[kCGWindowBounds as String] as? NSDictionary,
                 let rect = CGRect(dictionaryRepresentation: b), near(rect, hint)
@@ -60,22 +59,19 @@ enum FinderWatcher {
             && abs(a.maxY - b.maxY) <= 2
     }
 
-    private static func windowList() -> [[String: Any]] {
-        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        return CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] ?? []
-    }
-
     /// The Finder folder window + whatever normal windows sit above it, via CGWindowList —
     /// cheap enough to call per frame for smooth following and occlusion. Same top-left
     /// screen origin as `bounds` above. No permission needed: owner name + bounds, not titles.
     /// Our own note is at `.floating` level (layer != 0), so it's skipped by the layer filter.
     ///
     /// `number` picks the window to follow; any Finder window above it is one more occluder.
-    /// With no number, or once that window is gone, the frontmost Finder window is the one.
-    static func frontFinderWindow(number: Int? = nil) -> FinderWindowInfo? {
+    /// With no number the frontmost Finder window is the one. Once a numbered window is gone,
+    /// `orFrontmost` says whether the frontmost will do instead: yes while Finder is in front
+    /// (the next poll sorts it out), no in the background, where it is some other folder.
+    static func frontFinderWindow(number: Int? = nil, orFrontmost: Bool = true) -> FinderWindowInfo? {
         var covering: [CGRect] = []
         var frontmost: FinderWindowInfo?
-        for info in windowList() {  // front-to-back; only normal windows (layer 0)
+        for info in WindowServer.list() {  // front-to-back; only normal windows (layer 0)
             guard info[kCGWindowLayer as String] as? Int == 0,
                 // conditional cast: window-server data is another process's word, not ours
                 let b = info[kCGWindowBounds as String] as? NSDictionary,
@@ -94,7 +90,7 @@ enum FinderWatcher {
             }
             covering.append(rect)  // a normal window above the tracked Finder folder window
         }
-        return frontmost
+        return orFrontmost ? frontmost : nil
     }
 }
 
@@ -102,21 +98,41 @@ enum FinderWatcher {
 /// screen — so they're fresh even mid-drag, when an AX query would stall on the target
 /// app's busy main thread.
 enum WindowServer {
-    /// Frontmost normal (layer-0) on-screen window owned by `pid`, top-left screen coords.
-    /// The app is frontmost when this is polled, so its first layer-0 window is the focused
-    /// one. ponytail: a sheet can sit above its parent at layer 0 and win — the note pins to
-    /// the sheet until it closes; match on kCGWindowNumber via AX if that ever matters.
-    static func frontWindowBounds(pid: pid_t) -> CGRect? {
+    /// Every window on screen, front to back.
+    static func list() -> [[String: Any]] {
         let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
-        else { return nil }
+        return CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] ?? []
+    }
+
+    /// The on-screen window `number` of `pid`, or its frontmost one when no number is given —
+    /// with the other apps' windows stacked above it, for occlusion.
+    static func window(of pid: pid_t, number: Int? = nil) -> (number: Int, frame: Frame)? {
+        pick(from: list(), pid: pid, number: number)
+    }
+
+    /// The walk itself, over plain data so `--selftest` can hand it a made-up screen.
+    ///
+    /// Only normal (layer-0) windows count; our own notes float above that layer and are
+    /// skipped with everything else there. The app's *own* other windows are neither the hit
+    /// nor an occluder: a sheet or a popup sits above its parent at layer 0, and counting it
+    /// would blink the note away every time one opens.
+    static func pick(from list: [[String: Any]], pid: pid_t, number: Int?) -> (
+        number: Int, frame: Frame
+    )? {
+        var covering: [CGRect] = []
         for info in list {  // front-to-back
             guard info[kCGWindowLayer as String] as? Int == 0,
-                info[kCGWindowOwnerPID as String] as? Int == Int(pid),
+                // conditional cast: window-server data is another process's word, not ours
                 let b = info[kCGWindowBounds as String] as? NSDictionary,
                 let rect = CGRect(dictionaryRepresentation: b)
             else { continue }
-            return rect
+            guard info[kCGWindowOwnerPID as String] as? Int == Int(pid) else {
+                covering.append(rect)  // another app's window, above the one we are after
+                continue
+            }
+            if let n = info[kCGWindowNumber as String] as? Int, number == nil || n == number {
+                return (n, Frame(bounds: rect, covering: covering))
+            }
         }
         return nil
     }

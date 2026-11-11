@@ -46,13 +46,13 @@ extension AppDelegate {
             level: hit?.level ?? container.finestLevel)  // finest available, promote later
         current = container
         NSApp.activate(ignoringOtherApps: true)
-        note.focusForEditing()
+        notes[container.app]?.window.focusForEditing()
     }
 
-    /// Opens the Tack window on every note. The floating note is flushed first: it can be up to
-    /// a debounce behind the disk the grid is about to read.
+    /// Opens the Tack window on every note. The floating notes are flushed first: each can be up
+    /// to a debounce behind the disk the grid is about to read.
     @objc func openTack() {
-        note.flushPendingSave()
+        notes.values.forEach { $0.window.flushPendingSave() }
         openGrid()
     }
 

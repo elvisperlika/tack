@@ -197,13 +197,6 @@ final class NoteWindow: NSObject, NSWindowDelegate {
 
     // MARK: - Tracking
 
-    /// A display link synced to whatever display the note is on, so the caller samples the
-    /// window's position in vsync phase at the real refresh rate (120Hz on ProMotion) instead
-    /// of a fixed 60fps timer. Caller owns it: add to a run loop, invalidate to stop.
-    func makeDisplayLink(target: Any, selector: Selector) -> CADisplayLink {
-        window.displayLink(target: target, selector: selector)
-    }
-
     /// The tracked window moved or resized — keep the offset, reposition.
     func updateWindow(bounds: CGRect) { anchor.updateWindow(bounds: bounds) }
 

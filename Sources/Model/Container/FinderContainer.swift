@@ -1,3 +1,5 @@
+import AppKit
+
 /// A Finder folder. The note lives in a hidden .tack.json inside the folder itself, which is
 /// why it travels with the folder when you move or copy it — and why it can't be promoted.
 final class FinderContainer: Container {
@@ -26,7 +28,11 @@ final class FinderContainer: Container {
     /// Polled at 60fps to glue the note to the window. CGWindowList gives bounds and
     /// occluders in the same pass.
     override func frame() -> Frame? {
-        guard let info = FinderWatcher.frontFinderWindow(number: window) else { return nil }
+        let inFront = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.bundleID
+        guard
+            let info = FinderWatcher.frontFinderWindow(
+                number: window, orFrontmost: window == nil || inFront)
+        else { return nil }
         return Frame(bounds: info.bounds, covering: info.coveringRects)
     }
 }

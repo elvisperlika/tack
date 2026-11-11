@@ -18,6 +18,10 @@ class Container {
     /// Identity, coarse → fine: [app, window, tab]. Only as deep as the app actually resolves.
     var path: [String] { [] }
 
+    /// The app this surface belongs to — the first path component, a bundle ID. One note shows
+    /// per app at a time, so this is what the notes on screen are told apart by.
+    var app: String { path.first ?? "" }
+
     /// The coarsest level a note may attach at. Finder overrides this: its notes live in a
     /// .tack.json inside the folder, so "a note on all of Finder" has no file to live in.
     var minLevel: Int { 0 }

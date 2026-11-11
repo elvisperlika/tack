@@ -24,6 +24,7 @@ enum SelfTest {
         containerMovePreservesSourceOnFailure()
         finderContainerRoundTrip()
         finderReplyParsing()
+        windowPicking()
         genericKeyMatchesLegacyFormat()
         levelLabels()
         debouncerCollapses()
@@ -714,6 +715,30 @@ extension SelfTest {
         assert(
             AXWindows.follow([1, 5], from: tree, children: kids, match: isWeb) == nil,
             "a path past the end of a level is a miss, not a crash")
+    }
+
+    /// A note keeps following its own window once its app is in the background, and hides
+    /// under whatever other app's window covers it.
+    static func windowPicking() {
+        func win(_ pid: Int, _ number: Int, x: CGFloat, layer: Int = 0) -> [String: Any] {
+            [
+                kCGWindowOwnerPID as String: pid, kCGWindowNumber as String: number,
+                kCGWindowLayer as String: layer,
+                kCGWindowBounds as String: CGRect(x: x, y: 0, width: 100, height: 100)
+                    .dictionaryRepresentation,
+            ]
+        }
+        // front to back: a floating note, another app, our app's sheet, our app's document
+        let screen = [win(9, 1, x: 0, layer: 3), win(2, 20, x: 200), win(1, 11, x: 400), win(1, 10, x: 600)]
+
+        let front = WindowServer.pick(from: screen, pid: 1, number: nil)
+        assert(front?.number == 11, "no number means the app's frontmost window")
+        let doc = WindowServer.pick(from: screen, pid: 1, number: 10)
+        assert(doc?.frame.bounds.minX == 600, "a number follows that window, not the frontmost")
+        assert(
+            doc?.frame.covering == [CGRect(x: 200, y: 0, width: 100, height: 100)],
+            "only other apps' normal windows cover it: \(String(describing: doc?.frame.covering))")
+        assert(WindowServer.pick(from: screen, pid: 1, number: 99) == nil, "a window that left the screen is no window")
     }
 
     static func finderReplyParsing() {
