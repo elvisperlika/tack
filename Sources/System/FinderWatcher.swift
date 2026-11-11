@@ -8,15 +8,19 @@ struct FinderWindowInfo {
 
 /// Asks Finder (via one Apple event) which folder is frontmost and where its window is.
 enum FinderWatcher {
-    private static let script = NSAppleScript(
+    /// The timeout is per Apple event, and it is the same guard `AXWindows.limitWaiting` gives the Accessibility reads: AppleScript otherwise waits about two minutes on Tack's main thread, so a Finder stuck on a dead network volume took the menu and every note down with it.
+    /// shortcut: a Finder slower than two seconds reads as "no folder" for that poll and is retried on the next; lower it if a hung Finder still makes Tack stutter.
+    static let script = NSAppleScript(
         source: """
-            tell application "Finder"
-                if (count of Finder windows) is 0 then return "NONE"
-                set w to front Finder window
-                set p to POSIX path of (target of w as alias)
-                set b to bounds of w
-                return p & "|" & (item 1 of b) & "," & (item 2 of b) & "," & (item 3 of b) & "," & (item 4 of b)
-            end tell
+            with timeout of 2 seconds
+                tell application "Finder"
+                    if (count of Finder windows) is 0 then return "NONE"
+                    set w to front Finder window
+                    set p to POSIX path of (target of w as alias)
+                    set b to bounds of w
+                    return p & "|" & (item 1 of b) & "," & (item 2 of b) & "," & (item 3 of b) & "," & (item 4 of b)
+                end tell
+            end timeout
             """)
 
     /// The front folder's POSIX path and where Finder says its window is; nil when Finder has

@@ -24,6 +24,7 @@ enum SelfTest {
         containerMovePreservesSourceOnFailure()
         finderContainerRoundTrip()
         finderReplyParsing()
+        appleScriptsCompile()
         windowPicking()
         genericKeyMatchesLegacyFormat()
         levelLabels()
@@ -767,6 +768,15 @@ extension SelfTest {
         let folder = CGRect(x: 61, y: 288, width: 1160, height: 745)
         assert(FinderWatcher.near(folder, folder.offsetBy(dx: 1, dy: 0)), "rounding slack")
         assert(!FinderWatcher.near(folder, folder.offsetBy(dx: 40, dy: 0)), "another window is not it")
+    }
+
+    /// A script that doesn't compile fails every poll without a word, and that app's notes never show. Compiling sends the app nothing.
+    static func appleScriptsCompile() {
+        for (name, script) in [("Finder", FinderWatcher.script), ("Terminal", TerminalContainer.ttyScript)] {
+            var error: NSDictionary?
+            let compiled = script?.compileAndReturnError(&error) == true
+            assert(compiled, "the \(name) script must compile: \(error ?? [:])")
+        }
     }
 
     static func updateVersions() {

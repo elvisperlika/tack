@@ -6,12 +6,15 @@ import AppKit
 final class TerminalContainer: GenericAppContainer {
     static let bundleID = "com.apple.Terminal"
 
-    private static let ttyScript = NSAppleScript(
+    /// Timed out for the same reason as `FinderWatcher.script`: a hung Terminal must not hang Tack.
+    static let ttyScript = NSAppleScript(
         source: """
-            tell application "Terminal"
-                if (count of windows) is 0 then return ""
-                return tty of selected tab of front window
-            end tell
+            with timeout of 2 seconds
+                tell application "Terminal"
+                    if (count of windows) is 0 then return ""
+                    return tty of selected tab of front window
+                end tell
+            end timeout
             """)
 
     private let tty: String?
