@@ -111,6 +111,8 @@ jobs:
           security create-keychain -p ci "$KC"
           security set-keychain-settings "$KC"   # no auto-lock mid-build
           security unlock-keychain -p ci "$KC"
+          # codesign finds the certificate through --keychain but looks its private key up in the search list: without this it fails with "The specified item could not be found in the keychain".
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
           echo "$P12" | base64 --decode > "$RUNNER_TEMP/tack.p12"
           security import "$RUNNER_TEMP/tack.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC" > /dev/null
