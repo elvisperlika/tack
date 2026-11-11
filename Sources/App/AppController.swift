@@ -292,16 +292,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let known = fileDates[url]
             fileDates[url] = date
             guard let known, known != date else { continue }  // first look only records the date
-            var changed = keys
-            if url == AppNotes.storeURL, dashboardNote != nil, let all = try? AppNotes.all() {
-                changed.formUnion(all.keys)
-            }
-            for key in changed {
-                guard let disk = try? StoredNote.load(key: key) else {
-                    adoptFromDisk(key: key, note: nil)
-                    continue
+            do {
+                var changed = keys
+                if url == AppNotes.storeURL, dashboardNote != nil {
+                    changed.formUnion(try AppNotes.all().keys)
                 }
-                adoptFromDisk(key: key, note: disk)
+                for key in changed { adoptFromDisk(key: key, note: try StoredNote.load(key: key)) }
+            } catch {
+                // Unreadable is not deleted: a file caught half-written by a script or a sync must not take its notes off the screen. The date is put back so the next poll reads it again.
+                fileDates[url] = known
             }
         }
     }
