@@ -66,24 +66,59 @@ enum AXWindows {
     /// once a trusted client is watching, which we are. nil → the caller binds to the window
     /// instead of the tab. Called on the 0.4s poll only, never per frame.
     static func focusedURL(pid: pid_t) -> String? {
-        guard let win = focusedWindow(pid: pid), let area = webArea(in: win, depth: 0),
-            let value = attribute(area, kAXURLAttribute)
-        else { return nil }
+        guard let win = focusedWindow(pid: pid) else { return nil }
+        let kids: (AXUIElement) -> [AXUIElement] = {
+            attribute($0, kAXChildrenAttribute) as? [AXUIElement] ?? []
+        }
+        let isWebArea: (AXUIElement) -> Bool = { string($0, kAXRoleAttribute) == "AXWebArea" }
+        // The search asks every toolbar button and tab for its role and children, each one a
+        // round trip into the browser. The web area keeps its place in the window from one poll
+        // to the next, so the way to it is remembered and walked first: a handful of calls.
+        // The URL is still read fresh from whatever sits there, so a tab switch is never stale.
+        var area = follow(webAreaPath, from: win, children: kids, match: isWebArea)
+        if area == nil {
+            webAreaPath = []
+            area = find(from: win, path: &webAreaPath, children: kids, match: isWebArea)
+        }
+        guard let area, let value = attribute(area, kAXURLAttribute) else { return nil }
         if let u = value as? URL { return u.absoluteString }
         return value as? String
     }
 
+    /// Child indexes from the focused window down to its web area, as the last search found it.
+    private static var webAreaPath: [Int] = []
+
     // ponytail: depth-limited DFS; the web area sits a few levels under the window. Depth 6
     // covers Chrome and Safari today — raise it if a browser buries it deeper.
-    private static func webArea(in el: AXUIElement, depth: Int) -> AXUIElement? {
+    /// Generic over the node so `--selftest` can walk a plain tree; here the node is an AX element.
+    /// On a hit, `path` holds the child index taken at each level.
+    static func find<Node>(
+        from node: Node, depth: Int = 0, path: inout [Int], children: (Node) -> [Node],
+        match: (Node) -> Bool
+    ) -> Node? {
         if depth > 6 { return nil }
-        if string(el, kAXRoleAttribute) == "AXWebArea" { return el }
-        guard let value = attribute(el, kAXChildrenAttribute), let kids = value as? [AXUIElement]
-        else { return nil }
-        for kid in kids {
-            if let hit = webArea(in: kid, depth: depth + 1) { return hit }
+        if match(node) { return node }
+        for (i, kid) in children(node).enumerated() {
+            path.append(i)
+            if let hit = find(from: kid, depth: depth + 1, path: &path, children: children, match: match) {
+                return hit
+            }
+            path.removeLast()
         }
         return nil
+    }
+
+    /// The node `path` leads to, or nil when the tree has changed shape and it no longer matches.
+    static func follow<Node>(
+        _ path: [Int], from node: Node, children: (Node) -> [Node], match: (Node) -> Bool
+    ) -> Node? {
+        var node = node
+        for i in path {
+            let kids = children(node)
+            guard i < kids.count else { return nil }
+            node = kids[i]
+        }
+        return match(node) ? node : nil
     }
 
     private static func attribute(_ el: AXUIElement, _ attr: String) -> CFTypeRef? {

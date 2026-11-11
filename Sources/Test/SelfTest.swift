@@ -40,6 +40,7 @@ enum SelfTest {
         backspaceAtTheEnd()
         noteSizeIsOptional()
         urlNormalization()
+        treePathIsRemembered()
         notePreferencesPalette()
         fontFaces()
         pillGeometry()
@@ -797,6 +798,30 @@ extension SelfTest {
         assert((0..<30).allSatisfy(AppDelegate.samples), "a window that just moved is read every frame")
         let idle = (30..<90).filter(AppDelegate.samples).count
         assert(idle == 10, "a still window is read one frame in six: \(idle)")
+    }
+
+    /// The browser lookup: a search records the way to its hit, and that way is reusable.
+    static func treePathIsRemembered() {
+        // Each node is its own list of children; the leaf "web" is the target.
+        indirect enum Tree { case node(String, [Tree]) }
+        let kids: (Tree) -> [Tree] = { if case .node(_, let k) = $0 { return k } else { return [] } }
+        let isWeb: (Tree) -> Bool = { if case .node("web", _) = $0 { return true } else { return false } }
+        let tree = Tree.node("win", [
+            .node("toolbar", [.node("button", [])]),
+            .node("group", [.node("tabs", []), .node("web", [])]),
+        ])
+        var path: [Int] = []
+        let hit = AXWindows.find(from: tree, path: &path, children: kids, match: isWeb)
+        assert(hit != nil && path == [1, 1], "the search should record the way to its hit: \(path)")
+        assert(
+            AXWindows.follow(path, from: tree, children: kids, match: isWeb) != nil,
+            "a remembered path should lead back to the web area")
+        assert(
+            AXWindows.follow([0, 0], from: tree, children: kids, match: isWeb) == nil,
+            "a path that lands on something else is a miss")
+        assert(
+            AXWindows.follow([1, 5], from: tree, children: kids, match: isWeb) == nil,
+            "a path past the end of a level is a miss, not a crash")
     }
 
     static func markdownRoundTrip() {
