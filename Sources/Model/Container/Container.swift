@@ -188,6 +188,21 @@ extension Container {
         return .app
     }
 
+    /// What the note's "open where it lives" dot wears: the folder's own icon for a Finder note,
+    /// otherwise the icon of the app it was written on — a generic app when that app is gone.
+    static func revealIcon(for key: String) -> NSImage {
+        if case .folder(let path) = revealTarget(for: key),
+            FileManager.default.fileExists(atPath: path)
+        {
+            return NSWorkspace.shared.icon(forFile: path)
+        }
+        let bundleID = key.components(separatedBy: "|")[0]
+        if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            return NSWorkspace.shared.icon(forFile: app.path)
+        }
+        return NSWorkspace.shared.icon(for: .applicationBundle)
+    }
+
     /// Bring the surface a note belongs to back to the front. The note follows on its own: the
     /// poll notices the focus change and shows whatever is pinned there.
     ///

@@ -265,6 +265,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The dashboard floats over everything: left up, it would hide the app it just brought
         // forward. It turns back into its note, and the poll shows that app's note as usual.
         grid.onReveal = { [weak self] in self?.closeDashboard() }
+        grid.onChange = { [weak self] in
+            guard let self, let host = dashboardNote else { return }
+            host.setDashboardColors(self.grid.colors)
+        }
         return grid
     }()
 
@@ -289,6 +293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let host = note ?? notes[front].flatMap { $0.container == nil ? nil : $0.window } ?? looseNote
         grid.reload()
         host.onCollapse = { [weak self] in self?.closeDashboard() }
+        host.onDashboardPress = { [weak self] in self?.grid.unfocus() }
         host.onSettings = { [weak self, weak host] in
             guard let self, let host else { return }
             onSettingsPage.toggle()
@@ -297,6 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onSettingsPage = false
         host.expand(showing: grid.view, to: dashboardFrame(near: host.frame), color: Self.dashboardColor)
         dashboardNote = host
+        host.setDashboardColors(grid.colors)
     }
 
     func closeDashboard() {

@@ -6,7 +6,7 @@ import AppKit
 /// is only ever one owner of what the note says.
 final class NoteEditor: NSObject, NSTextViewDelegate {
     /// The scroll view to mount in the note's card.
-    let view: NSScrollView
+    let view: FocusScrollView
     let textView: MarkdownTextView
 
     /// The buffer changed and is worth persisting.
@@ -25,7 +25,7 @@ final class NoteEditor: NSObject, NSTextViewDelegate {
     private func adoptFamily() { MarkdownStyle.family = family }
 
     init(frame: NSRect) {
-        view = NSScrollView(frame: frame)
+        view = FocusScrollView(frame: frame)
         view.drawsBackground = false
         view.hasVerticalScroller = false
         view.autoresizingMask = [.width, .height]
@@ -118,5 +118,16 @@ final class NoteEditor: NSObject, NSTextViewDelegate {
     /// falls through to the text view's own handling.
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         MarkdownInput.handle(selector, textView)
+    }
+}
+
+/// A note's text scroll view that scrolls only while it is allowed to. When it isn't — a card
+/// in the dashboard that hasn't been clicked — the wheel goes on to whatever holds it, so the
+/// dashboard scrolls as a whole instead of catching on every note the cursor crosses.
+final class FocusScrollView: NSScrollView {
+    var scrollsItself = true
+
+    override func scrollWheel(with event: NSEvent) {
+        if scrollsItself { super.scrollWheel(with: event) } else { nextResponder?.scrollWheel(with: event) }
     }
 }

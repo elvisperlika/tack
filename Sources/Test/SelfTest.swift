@@ -40,6 +40,7 @@ enum SelfTest {
         backspaceAtTheEnd()
         noteSizeIsOptional()
         urlNormalization()
+        dashboardBackdrop()
         updateVersions()
         updateReleaseParsing()
         treePathIsRemembered()
@@ -785,6 +786,15 @@ extension SelfTest {
 
         let repo = Data(#"{"name": "tack", "stargazers_count": 42, "forks_count": 3}"#.utf8)
         assert(try! Updater.stars(from: repo) == 42, "the star count comes from stargazers_count")
+    }
+
+    static func dashboardBackdrop() {
+        assert(NoteGrid.backdrop([]) == [], "no notes, no gradient")
+        assert(NoteGrid.backdrop(["ffeb73"]) == ["FFEB73", "FFEB73"], "one colour still makes a run")
+        assert(
+            NoteGrid.backdrop(["FFEB73", "AEC6FF", "ffeb73", "FFB3BA"]) == ["FFEB73", "AEC6FF", "FFB3BA"],
+            "each colour once, in the order the notes come")
+        assert(NoteGrid.backdrop(["1", "2", "3", "4", "5"]).count == 4, "at most four stops")
     }
 
     static func markdownRoundTrip() {

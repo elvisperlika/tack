@@ -11,6 +11,8 @@ final class NoteGrid: NSObject {
     let view: NSScrollView
     private let wrap = WrapView()
     private var cells: [NoteGridCell] = []
+    /// The card last clicked: the one that scrolls its own text, and sits lifted off the rest.
+    private weak var focused: NoteGridCell?
     private var placeholder: NSTextField?
     private let onError: (Error) -> Void
 
@@ -18,6 +20,21 @@ final class NoteGrid: NSObject {
     var onLiveEdit: ((String, Note) -> Void)?
     /// A cell brought the app its note lives on to the front.
     var onReveal: (() -> Void)?
+    /// The notes in the grid — or their colours — may have changed: the dashboard repaints its
+    /// background from `colors`.
+    var onChange: (() -> Void)?
+
+    /// The colours of the notes shown, as the dashboard's background uses them.
+    var colors: [String] { Self.backdrop(cells.map(\.colorHex)) }
+
+    /// Each colour once, in the order the notes are laid out, at most four — past that a
+    /// gradient is mud. One colour still makes two stops, so a gradient always has a run.
+    static func backdrop(_ hexes: [String]) -> [String] {
+        var seen = Set<String>()
+        let distinct = hexes.map { $0.uppercased() }.filter { seen.insert($0).inserted }
+        let stops = Array(distinct.prefix(4))
+        return stops.count == 1 ? stops + stops : stops
+    }
 
     init(onError: @escaping (Error) -> Void) {
         self.onError = onError
@@ -30,6 +47,13 @@ final class NoteGrid: NSObject {
         wrap.autoresizingMask = [.width]  // the clip view owns the width; layout() sets the height
         view.documentView = wrap
         super.init()
+        wrap.onPress = { [weak self] in self?.unfocus() }
+    }
+
+    /// Put down whichever card is lifted, and end its editing — a click anywhere off the cards.
+    func unfocus() {
+        focus(nil)
+        wrap.window?.makeFirstResponder(nil)
     }
 
     func reload() {
@@ -45,6 +69,7 @@ final class NoteGrid: NSObject {
             onError(error)
             return
         }
+        defer { onChange?() }
         guard !stored.isEmpty else {
             setPlaceholder(true)
             wrap.needsLayout = true
@@ -61,6 +86,7 @@ final class NoteGrid: NSObject {
     /// built at until the next reload. Reframing mid-type would reflow the whole grid under the
     /// cursor, which is worse than a stale size.
     func update(key: String, note: Note) {
+        defer { onChange?() }
         if let cell = cells.first(where: { $0.key == key }) {
             guard !note.isDeletion else { return drop(cell) }
             cell.apply(note)
@@ -75,11 +101,23 @@ final class NoteGrid: NSObject {
     private func add(_ cell: NoteGridCell) {
         cell.onError = onError
         cell.onDelete = { [weak self] cell in self?.drop(cell) }
-        cell.onLiveEdit = { [weak self] key, note in self?.onLiveEdit?(key, note) }
+        cell.onLiveEdit = { [weak self] key, note in
+            self?.onLiveEdit?(key, note)
+            self?.onChange?()  // a colour picked on a card shows in the background at once
+        }
         cell.onReveal = { [weak self] in self?.onReveal?() }
+        cell.onPress = { [weak self, weak cell] in self?.focus(cell) }
         setPlaceholder(false)
         cells.append(cell)
         wrap.addSubview(cell)
+    }
+
+    /// Lift `cell` and let it scroll its own text; whichever was lifted before settles back.
+    private func focus(_ cell: NoteGridCell?) {
+        guard cell !== focused else { return }
+        focused?.setFocused(false)
+        cell?.setFocused(true)
+        focused = cell
     }
 
     /// Write out anything still sitting in a cell's debounce — on quit, and before a reload.
@@ -94,6 +132,7 @@ final class NoteGrid: NSObject {
         cell.removeFromSuperview()
         setPlaceholder(cells.isEmpty)
         wrap.needsLayout = true
+        onChange?()
     }
 
     /// Kept as a field rather than found by type: cells hold labels of their own, and picking the
@@ -123,6 +162,11 @@ private final class WrapView: NSView {
 
     override var isFlipped: Bool { true }  // rows fill top-down, the way they're read
 
+    /// A click between the cards.
+    var onPress: () -> Void = {}
+
+    override func mouseDown(with event: NSEvent) { onPress() }
+
     override func layout() {
         super.layout()
         let gap = Self.gap
@@ -137,7 +181,10 @@ private final class WrapView: NSView {
             x += sub.frame.width + gap
             rowHeight = max(rowHeight, sub.frame.height)
         }
-        let height = y + rowHeight + gap
+        // At least as tall as what the scroll view shows: the empty space under the last row is
+        // still the grid, and a click there has to reach it (to drop the focus) rather than
+        // fall through to the card behind.
+        let height = max(y + rowHeight + gap, enclosingScrollView?.contentSize.height ?? 0)
         // Guarded: setFrameSize re-enters layout, and an unconditional set would never settle.
         if abs(frame.height - height) > 0.5 {
             setFrameSize(NSSize(width: frame.width, height: height))
@@ -157,8 +204,11 @@ private final class NoteGridCell: NSView {
     var onDelete: (NoteGridCell) -> Void = { _ in }
     var onLiveEdit: (String, Note) -> Void = { _, _ in }
     var onReveal: () -> Void = {}
+    var onPress: () -> Void = {}
 
     var key: String { stored.key }
+    /// The colour the card shows now, previews aside — edits included before they are saved.
+    var colorHex: String { card.styler.colorHex }
 
     init(stored: StoredNote) {
         self.stored = stored
@@ -170,8 +220,10 @@ private final class NoteGridCell: NSView {
                 x: 0, y: 0, width: size.width,
                 height: size.height + header.frame.height + Self.headerGap))
 
-        // ponytail: a note whose text overflows scrolls itself before the grid does — AppKit
-        // only chains to the outer scroller once the inner one is at its end. Lives with it.
+        // Only the card in focus scrolls its own text; the others hand the wheel to the grid.
+        card.editor.view.scrollsItself = false
+        card.onPress = { [weak self] in self?.onPress() }
+        wantsLayer = true
         card.view.frame = NSRect(origin: .zero, size: size)
         card.view.autoresizingMask = []  // cells don't resize; the note keeps the size it has
         addSubview(card.view)
@@ -180,6 +232,7 @@ private final class NoteGridCell: NSView {
         card.load(stored.note)
         card.onEdit = { [weak self] in self?.scheduleSave() }
         card.onDelete = { [weak self] in self?.deleteConfirmed() }
+        card.pill.revealIcon = Container.revealIcon(for: stored.key)
         card.pill.onReveal = { [weak self] in
             guard let self, Container.reveal(key: key) else { return }
             onReveal()
@@ -187,6 +240,43 @@ private final class NoteGridCell: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("not from a nib") }
+
+    // MARK: - Focus
+
+    private static let liftScale: CGFloat = 1.03
+    private static let liftDuration = 0.18
+
+    /// Picked up or put down. Picked up, the card grows a touch about its own centre and casts a
+    /// deeper shadow, as if lifted off the page — and it is the one card whose text scrolls.
+    func setFocused(_ focused: Bool) {
+        card.editor.view.scrollsItself = focused
+        guard let layer else { return }
+        let card = self.card.view.frame
+        // The layer's anchor is its corner, so the scale is wrapped in a move to the card's
+        // centre and back. The header rides along; only the card casts the shadow.
+        var lift = CATransform3DMakeTranslation(card.midX, card.midY, 0)
+        lift = CATransform3DScale(lift, Self.liftScale, Self.liftScale, 1)
+        lift = CATransform3DTranslate(lift, -card.midX, -card.midY, 0)
+        layer.shadowPath = CGPath(
+            roundedRect: card, cornerWidth: 12, cornerHeight: 12, transform: nil)
+        layer.shadowColor = NSColor.black.cgColor
+        layer.shadowOffset = CGSize(width: 0, height: -6)
+        layer.shadowRadius = 14
+        layer.zPosition = focused ? 1 : 0  // over its neighbours, without reordering the grid
+
+        let to: (transform: CATransform3D, opacity: Float) =
+            focused ? (lift, 0.22) : (CATransform3DIdentity, 0)
+        for (key, value) in [("transform", to.transform as Any), ("shadowOpacity", to.opacity as Any)] {
+            let move = CABasicAnimation(keyPath: key)
+            move.fromValue = layer.presentation()?.value(forKeyPath: key) ?? layer.value(forKeyPath: key)
+            move.toValue = value
+            move.duration = Self.liftDuration
+            move.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            layer.add(move, forKey: key)
+        }
+        layer.transform = to.transform
+        layer.shadowOpacity = to.opacity
+    }
 
     /// The note at the size it was left at, floored by the same minimum a real note has.
     private static func size(of note: Note) -> NSSize {

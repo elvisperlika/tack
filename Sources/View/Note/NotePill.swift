@@ -27,6 +27,11 @@ final class NotePill: NSObject {
     /// Bring forward the app, tab or folder this note lives on. nil hides the dot: a floating
     /// note is already sitting on it.
     var onReveal: (() -> Void)?
+    /// The icon of where the note lives — its app or its folder — which the reveal dot wears in
+    /// place of a symbol, so the dot says where it goes.
+    var revealIcon: NSImage? {
+        didSet { revealDot.image = revealIcon.map(Self.iconDot) ?? Self.symbolDot("arrow.up.forward.app.fill") }
+    }
     /// Turn the dashboard back into the note — the one resting dot while the note is the dashboard.
     var onCollapse: () -> Void = {}
     /// Switch the dashboard between every note and the settings page.
@@ -246,6 +251,16 @@ final class NotePill: NSObject {
         if isDashboard { return [settingsDot, backDot] }
         return [fontDot, colorDot] + (pinChoices.count > 1 ? [pinDot] : [])
             + (onOpenAll != nil ? [allDot] : []) + (onReveal != nil ? [revealDot] : []) + [deleteDot]
+    }
+
+    /// An app or folder icon at dot size. Drawn bare: an app icon carries its own shape, and a
+    /// circle around it would only shrink it.
+    private static func iconDot(_ icon: NSImage) -> NSImage {
+        let size = dotSize
+        return NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+            return true
+        }
     }
 
     /// A dot wearing an SF Symbol: white with a grey glyph for the pin level and its picker, red

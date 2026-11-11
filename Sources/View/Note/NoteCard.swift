@@ -79,12 +79,20 @@ final class NoteCard: NSObject {
         view.addSubview(pill.view)
 
         super.init()
-        view.onPress = { [weak self] in self?.pill.close() }  // the picker's way out
-        editor.onPress = { [weak self] in self?.pill.close() }
+        view.onPress = { [weak self] in self?.pressed() }
+        editor.onPress = { [weak self] in self?.pressed() }
         editor.onEdit = { [weak self] in self?.onEdit() }
         pill.onFont = { [weak self] face, commit in self?.choose(family: face, commit: commit) }
         pill.onColor = { [weak self] color, commit in self?.choose(color: color, commit: commit) }
         pill.onDelete = { [weak self] in self?.deleteTapped() }
+    }
+
+    /// A click landed on the card, text or glass — the dashboard takes it as "this one".
+    var onPress: () -> Void = {}
+
+    private func pressed() {
+        pill.close()  // the picker's way out
+        onPress()
     }
 
     // MARK: - Contents
