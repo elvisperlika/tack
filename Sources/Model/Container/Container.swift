@@ -91,8 +91,9 @@ extension Container {
     /// Which container the frontmost app gets. The one place per-app rules live.
     static func resolve(front: NSRunningApplication) -> Container? {
         if front.bundleIdentifier == FinderContainer.bundleID {
-            guard let folder = FinderWatcher.frontFolderPath() else { return nil }
-            return FinderContainer(folder: folder)
+            guard let front = FinderWatcher.frontFolder() else { return nil }
+            return FinderContainer(
+                folder: front.path, window: FinderWatcher.windowNumber(near: front.bounds))
         }
         if let id = front.bundleIdentifier {
             if BrowserContainer.bundleIDs.contains(id) { return BrowserContainer(app: front) }

@@ -23,6 +23,7 @@ enum SelfTest {
         containerPromotion()
         containerMovePreservesSourceOnFailure()
         finderContainerRoundTrip()
+        finderReplyParsing()
         genericKeyMatchesLegacyFormat()
         levelLabels()
         debouncerCollapses()
@@ -825,6 +826,20 @@ extension SelfTest {
         assert(
             AXWindows.follow([1, 5], from: tree, children: kids, match: isWeb) == nil,
             "a path past the end of a level is a miss, not a crash")
+    }
+
+    static func finderReplyParsing() {
+        let hit = FinderWatcher.parse("/Users/me/a|b/|61,288,1221,1033")
+        assert(hit?.path == "/Users/me/a|b/", "a bar in a folder name is part of the path")
+        assert(
+            hit?.bounds == CGRect(x: 61, y: 288, width: 1160, height: 745),
+            "left,top,right,bottom should become a rect: \(String(describing: hit?.bounds))")
+        assert(FinderWatcher.parse("NONE") == nil, "no Finder window is no folder")
+        assert(FinderWatcher.parse("/a|1,2,3") == nil, "a short reply is no folder")
+
+        let folder = CGRect(x: 61, y: 288, width: 1160, height: 745)
+        assert(FinderWatcher.near(folder, folder.offsetBy(dx: 1, dy: 0)), "rounding slack")
+        assert(!FinderWatcher.near(folder, folder.offsetBy(dx: 40, dy: 0)), "another window is not it")
     }
 
     static func markdownRoundTrip() {

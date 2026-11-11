@@ -20,30 +20,62 @@ enum FinderWatcher {
             end tell
             """)
 
-    /// The front folder's POSIX path; nil when Finder has no open window, isn't running, or
-    /// permission is denied. The window bounds come from CGWindowList below, so only the path
-    /// is read out of the reply — the script still fetches bounds to keep the Apple event,
-    /// and the reply format, untouched.
-    static func frontFolderPath() -> String? {
+    /// The front folder's POSIX path and where Finder says its window is; nil when Finder has
+    /// no open window, isn't running, or permission is denied. The bounds are only a hint for
+    /// picking that window out of the window list — per-frame tracking reads the list itself.
+    static func frontFolder() -> (path: String, bounds: CGRect)? {
         var err: NSDictionary?
-        guard let result = script?.executeAndReturnError(&err).stringValue, result != "NONE" else {
-            return nil
-        }
-        let parts = result.components(separatedBy: "|")
-        guard parts.count == 2, !parts[0].isEmpty else { return nil }
-        return parts[0]
+        guard let result = script?.executeAndReturnError(&err).stringValue else { return nil }
+        return parse(result)
     }
 
-    /// Front Finder folder window + whatever normal windows sit above it, via CGWindowList —
+    /// "path|left,top,right,bottom". Split at the *last* bar: a folder name may hold one too.
+    static func parse(_ reply: String) -> (path: String, bounds: CGRect)? {
+        guard let bar = reply.range(of: "|", options: .backwards) else { return nil }  // "NONE"
+        let path = String(reply[..<bar.lowerBound])
+        let n = reply[bar.upperBound...].split(separator: ",").compactMap { Double($0) }
+        guard !path.isEmpty, n.count == 4 else { return nil }
+        return (path, CGRect(x: n[0], y: n[1], width: n[2] - n[0], height: n[3] - n[1]))
+    }
+
+    /// The window-server number of the Finder window sitting where Finder said its front folder
+    /// window is. "Front Finder window" means a *folder* window, but the window list also holds
+    /// Finder's info panels and dialogs, and the frontmost of those is not always the folder.
+    /// nil when nothing lines up (the window moved between the two reads): tracking then falls
+    /// back to the frontmost Finder window, as it always did.
+    static func windowNumber(near hint: CGRect) -> Int? {
+        for info in windowList() where info[kCGWindowOwnerName as String] as? String == "Finder" {
+            guard info[kCGWindowLayer as String] as? Int == 0,
+                let b = info[kCGWindowBounds as String] as? NSDictionary,
+                let rect = CGRect(dictionaryRepresentation: b), near(rect, hint)
+            else { continue }
+            return info[kCGWindowNumber as String] as? Int
+        }
+        return nil
+    }
+
+    /// Finder and the window server report the same rect; the slack is for rounding only.
+    static func near(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) <= 2 && abs(a.minY - b.minY) <= 2 && abs(a.maxX - b.maxX) <= 2
+            && abs(a.maxY - b.maxY) <= 2
+    }
+
+    private static func windowList() -> [[String: Any]] {
+        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        return CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] ?? []
+    }
+
+    /// The Finder folder window + whatever normal windows sit above it, via CGWindowList —
     /// cheap enough to call per frame for smooth following and occlusion. Same top-left
     /// screen origin as `bounds` above. No permission needed: owner name + bounds, not titles.
     /// Our own note is at `.floating` level (layer != 0), so it's skipped by the layer filter.
-    static func frontFinderWindow() -> FinderWindowInfo? {
-        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
-        else { return nil }
+    ///
+    /// `number` picks the window to follow; any Finder window above it is one more occluder.
+    /// With no number, or once that window is gone, the frontmost Finder window is the one.
+    static func frontFinderWindow(number: Int? = nil) -> FinderWindowInfo? {
         var covering: [CGRect] = []
-        for info in list {  // front-to-back; only normal windows (layer 0)
+        var frontmost: FinderWindowInfo?
+        for info in windowList() {  // front-to-back; only normal windows (layer 0)
             guard info[kCGWindowLayer as String] as? Int == 0,
                 // conditional cast: window-server data is another process's word, not ours
                 let b = info[kCGWindowBounds as String] as? NSDictionary,
@@ -56,11 +88,13 @@ enum FinderWatcher {
                 // small. Skipped entirely: it's not an occluder either, it sits *inside* the
                 // folder view. ponytail: size heuristic; match kCGWindowNumber if it misfires.
                 if rect.width < 200 || rect.height < 80 { continue }
-                return FinderWindowInfo(bounds: rect, coveringRects: covering)
+                let found = FinderWindowInfo(bounds: rect, coveringRects: covering)
+                if number == nil || info[kCGWindowNumber as String] as? Int == number { return found }
+                if frontmost == nil { frontmost = found }
             }
-            covering.append(rect)  // a normal window above the front Finder folder window
+            covering.append(rect)  // a normal window above the tracked Finder folder window
         }
-        return nil
+        return frontmost
     }
 }
 
