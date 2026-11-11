@@ -311,16 +311,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func adoptFromDisk(key: String, note: Note?) {
         if let entry = notes.values.first(where: { $0.key == key }) {
             if !entry.window.hasPendingEdit {
-                entry.seen = note
                 if let note {
+                    entry.seen = note
                     if entry.window.currentNote != note { entry.window.applyLive(note) }
-                } else {
+                } else if Self.deletedElsewhere(seen: entry.seen) {
+                    entry.seen = nil
                     hide(entry)
                 }
             }
         }
         if dashboardNote != nil { grid.adoptFromDisk(key: key, note: note) }
     }
+
+    /// A note missing from its file was deleted by somebody else only if Tack last knew it with words in it: an empty note is never stored (`Note.isDeletion`), so one dragged before being typed in, or just emptied, is missing because Tack saved it so, and hiding it would pull it from under the caret.
+    static func deletedElsewhere(seen: Note?) -> Bool { seen?.isDeletion != true }
 
     /// Put `note` on every view of it — the floating note and the dashboard's card — because a
     /// save kept words from the file over the ones on screen.

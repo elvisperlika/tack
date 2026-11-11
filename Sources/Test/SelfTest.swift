@@ -42,6 +42,7 @@ enum SelfTest {
         urlNormalization()
         dashboardBackdrop()
         mergeKeepsNewerFile()
+        emptyNoteSurvivesItsOwnSave()
         updateVersions()
         updateReleaseParsing()
         treePathIsRemembered()
@@ -689,6 +690,15 @@ extension SelfTest {
         _ = MarkdownInput.handle(#selector(NSStandardKeyBindingResponding.deleteBackward(_:)), tv)
         let body = tv.textStorage.map(MarkdownDocument.serialize)
         assert(body == "a **b**", "backspace at a heading's start must keep inline styles: \(body ?? "")")
+    }
+
+    /// Saving an empty note removes it from the file; the disk sync must not read that as a deletion from outside and take the note off the screen.
+    static func emptyNoteSurvivesItsOwnSave() {
+        let fresh = Note(text: "", dx: 10, dy: 10)
+        assert(!AppDelegate.deletedElsewhere(seen: fresh), "a new, still empty note stays up")
+        let written = Note(text: "words", dx: 10, dy: 10)
+        assert(AppDelegate.deletedElsewhere(seen: written), "a note with words that left the file goes")
+        assert(AppDelegate.deletedElsewhere(seen: nil), "nothing known about it: the file decides")
     }
 
     static func trackingBacksOff() {
