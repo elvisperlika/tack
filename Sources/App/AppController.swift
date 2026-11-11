@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         didSet { oldValue?.invalidate() }  // an outlived link would keep firing
     }
     private var lastPersistenceError: String?
+    private var lastBounds: CGRect?  // where the tracked window was at the last sample
+    private var stillFrames = 0  // samples since it last moved — see samples(stillFrames:)
 
     var current: Container?
 
@@ -96,9 +98,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func trackTarget() {
+        stillFrames += 1
+        guard Self.samples(stillFrames: stillFrames) else { return }
         guard let f = current?.frame() else { return }
+        if f.bounds != lastBounds {
+            lastBounds = f.bounds
+            stillFrames = 0
+        }
         apply(f)
     }
+
+    /// Whether this frame reads the window list. Every frame while the window is moving; once it
+    /// has sat still for 30, one frame in six — the read walks every window on screen, and a
+    /// window at rest was paying for it at the full refresh rate.
+    /// shortcut: the first frame of a new drag can be up to five frames late (~40ms at 120Hz);
+    /// wake on AXWindowMoved instead if that ever shows.
+    static func samples(stillFrames: Int) -> Bool { stillFrames < 30 || stillFrames % 6 == 0 }
 
     /// The one place the note follows its window. Containers that can't be covered report no
     /// occluders, so the same two lines serve Finder and app windows alike.
@@ -115,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let link = note.makeDisplayLink(target: self, selector: #selector(trackTarget))
         link.add(to: .main, forMode: .common)
         trackLink = link
+        stillFrames = 0  // a note just shown tracks at full rate from its first frame
     }
 
     // MARK: - Show / hide

@@ -26,6 +26,7 @@ enum SelfTest {
         genericKeyMatchesLegacyFormat()
         levelLabels()
         debouncerCollapses()
+        trackingBacksOff()
         markdownSpans()
         markdownParse()
         markdownListEditing()
@@ -790,6 +791,12 @@ extension SelfTest {
         _ = MarkdownInput.handle(#selector(NSStandardKeyBindingResponding.deleteBackward(_:)), tv)
         let body = tv.textStorage.map(MarkdownDocument.serialize)
         assert(body == "a **b**", "backspace at a heading's start must keep inline styles: \(body ?? "")")
+    }
+
+    static func trackingBacksOff() {
+        assert((0..<30).allSatisfy(AppDelegate.samples), "a window that just moved is read every frame")
+        let idle = (30..<90).filter(AppDelegate.samples).count
+        assert(idle == 10, "a still window is read one frame in six: \(idle)")
     }
 
     static func markdownRoundTrip() {
