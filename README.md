@@ -73,7 +73,7 @@ A small glass dot sits in the note's top-right corner. Put the cursor on it and 
 
 Right-click the card for the rest. Color opens the full swatch grid the pill's colours come from: four to start (yellow, pink, blue, white), "+" adds one, and a tiny × removes one, though the last colour stays. Pin sets how widely the note shows, this window or this app, plus this tab in Chrome/Safari/Arc and Terminal. Pin only appears when there's a choice to make, since Finder notes live in the folder itself and have no levels.
 
-Click 📌 → Open Tack (⌘O) to see every note at once, each card under the window, tab or folder it's pinned to. The cards are live: edit one here or on its own window and the other keeps up as you type. ⌘-click a card's header and that window, tab or folder comes back to the front.
+Click 📌 → Open Tack (⌘O), or the stack dot in a note's pill, and the note grows into a dashboard of every note, each card under the window, tab or folder it's pinned to. The cards are live: edit one here or on its own window and the other keeps up as you type. A card's pill has a dot that brings its window, tab or folder back to the front.
 
 <p align="center">
   <img src="images/video.gif" alt="Editing a note in the Tack window and on its Finder folder at the same time" width="800">

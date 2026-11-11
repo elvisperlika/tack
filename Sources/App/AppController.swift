@@ -22,9 +22,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (its window is reused), so "showing" is `container != nil`, not membership.
     private(set) var notes: [String: ShownNote] = [:]
     private var statusItem: NSStatusItem?
-    /// The Tack window — every note at once. Nil until it is first opened, so a session that
-    /// never opens it never builds a window.
-    private(set) var grid: NoteGrid?
     private var pollTimer: Timer?  // slow: which surface is focused (~0.4s)
     private var trackLink: CADisplayLink? {  // vsync glue: each shown note follows its window
         didSet { oldValue?.invalidate() }  // an outlived link would keep firing
@@ -58,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // Everything is flushed before anything is judged: `&&` would skip the rest after a failure.
         let notesSaved = notes.values.map { $0.window.flushPendingSave() }.allSatisfy { $0 }
-        let gridSaved = grid?.flush() ?? true
+        let gridSaved = grid.flush()
         if notesSaved && gridSaved { return .terminateNow }
         // Refusing outright made Quit a dead button for as long as the save kept failing.
         let alert = NSAlert()
@@ -85,6 +82,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Decides what the *focused* app shows. Only that app's note is ever changed here: the
     /// notes of every other app stay up, following their own windows.
     private func pollTarget() {
+        // The note that is the dashboard keeps its app's slot until it turns back into a note:
+        // re-showing or hiding that slot meanwhile would yank the dashboard away.
+        if let host = dashboardNote,
+            let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            notes[front]?.window === host
+        {
+            return
+        }
         guard let container = resolve() else {
             // Nothing to pin to in front (no window, no folder): that app's note goes.
             if let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
@@ -203,9 +208,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // Only an open dashboard cares, and only it knows this note by its storage key.
         note.onLiveEdit = { [weak self] edited in
-            self?.grid?.update(key: container.key(at: box.value), note: edited)
+            self?.grid.update(key: container.key(at: box.value), note: edited)
         }
         note.onDelete = { [weak entry] in entry?.container = nil }  // nothing left to follow
+        note.onOpenAll = { [weak self, weak note] in
+            guard let self, let note else { return }
+            openDashboard(from: note)
+        }
         let choices = container.pinLevels.map {
             (
                 level: $0, label: LevelName.label(level: $0, of: container.path.count),
@@ -222,7 +231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             box.value = newLevel  // redirect this note's later edits — same cell the save closure reads
             // The dashboard knows a note by its key, and the key just changed: left alone, its
             // cell would write the note back under the old one on the next edit there.
-            self.grid?.reload()
+            self.grid.reload()
             return true
         }
         apply(f, to: note)
@@ -241,16 +250,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Builds the Tack window the first time it is asked for, and shows it.
-    func openGrid() {
-        let window = grid ?? NoteGrid { [weak self] error in self?.reportPersistenceError(error) }
-        window.onLiveEdit = { [weak self] key, edited in
+    // MARK: - Dashboard
+
+    /// Every note at once. Built the first time the dashboard opens.
+    private(set) lazy var grid: NoteGrid = {
+        let grid = NoteGrid { [weak self] error in self?.reportPersistenceError(error) }
+        grid.onLiveEdit = { [weak self] key, edited in
             // A note that isn't on screen has nothing to keep in step.
             guard let self, let entry = notes.values.first(where: { $0.key == key }) else { return }
             if edited.isDeletion { hide(entry) } else { entry.window.applyLive(edited) }
         }
-        grid = window
-        window.open()
+        // The dashboard floats over everything: left up, it would hide the app it just brought
+        // forward. It turns back into its note, and the poll shows that app's note as usual.
+        grid.onReveal = { [weak self] in self?.closeDashboard() }
+        return grid
+    }()
+
+    /// The note that is the dashboard right now, if one is.
+    private weak var dashboardNote: NoteWindow?
+    /// Becomes the dashboard when it is opened from the menu bar with no note on screen to grow.
+    private lazy var looseNote = NoteWindow()
+
+    /// `note` becomes the dashboard — or, from the menu bar, the note of the app in front, or a
+    /// bare card when that app shows none. A dashboard already up just comes forward.
+    func openDashboard(from note: NoteWindow?) {
+        if let current = dashboardNote, current.isExpanded {
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        notes.values.forEach { $0.window.flushPendingSave() }  // the grid is about to read disk
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+        let host = note ?? notes[front].flatMap { $0.container == nil ? nil : $0.window } ?? looseNote
+        grid.reload()
+        host.onCollapse = { [weak self] in self?.closeDashboard() }
+        host.expand(showing: grid.view, to: dashboardFrame(near: host.frame), color: Self.dashboardColor)
+        dashboardNote = host
+    }
+
+    func closeDashboard() {
+        guard let host = dashboardNote else { return }
+        grid.flush()
+        UserDefaults.standard.set(NSStringFromRect(host.frame), forKey: Self.dashboardFrameKey)
+        dashboardNote = nil
+        host.collapse()
+    }
+
+    private static let dashboardFrameKey = "dashboardFrame"
+
+    /// Where the dashboard opens: where it was last left, while that is still on a screen;
+    /// otherwise 760×560 in the middle of the screen `near` is on.
+    private func dashboardFrame(near: NSRect) -> NSRect {
+        if let saved = UserDefaults.standard.string(forKey: Self.dashboardFrameKey) {
+            let frame = NSRectFromString(saved)
+            if NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }) { return frame }
+        }
+        let screen = NSScreen.screens.first { $0.frame.intersects(near) } ?? NSScreen.main
+        let area = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let size = NSSize(width: min(760, area.width - 40), height: min(560, area.height - 40))
+        return NSRect(
+            x: area.midX - size.width / 2, y: area.midY - size.height / 2,
+            width: size.width, height: size.height)
+    }
+
+    /// The dashboard's background, solid — what a growing note washes to. Read in the light
+    /// appearance the cards are always drawn in, so the two never clash.
+    private static var dashboardColor: NSColor {
+        var color = NSColor.windowBackgroundColor
+        NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
+            color = color.usingColorSpace(.sRGB) ?? color
+        }
+        return color
     }
 
     func reportPersistenceError(_ error: Error) {

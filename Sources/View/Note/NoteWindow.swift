@@ -25,6 +25,9 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     /// Called after the user deletes the note (so the app can stop tracking it).
     var onDelete: (() -> Void)?
 
+    /// The pill's "all notes" dot: open the Tack window.
+    var onOpenAll: (() -> Void)?
+
     /// Every edit as it lands, ahead of the debounce that writes it — for anything showing the
     /// same note live. An empty note is a deletion, the same as everywhere else.
     var onLiveEdit: ((Note) -> Void)?
@@ -33,6 +36,9 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     private var active = false  // current folder has a note to show
     private var occluded = false  // the note's spot on the Finder window is covered
     private var shown = false  // what the last pop animated toward (the window stays visible while popping out)
+    /// The note is the dashboard, or on its way to or from it. It is let go of its tracked
+    /// window meanwhile: neither the tracker nor the window delegate may touch the frame.
+    private var lifting = false
 
     override init() {
         let size = NotePreferences.shared.defaultSize
@@ -59,7 +65,13 @@ final class NoteWindow: NSObject, NSWindowDelegate {
         card.onEdit = { [weak self] in self?.scheduleSave() }
         card.onDelete = { [weak self] in self?.deleteConfirmed() }
         card.pill.onPin = { [weak self] level in self?.pick(level: level) }
-        card.view.onDrag = { [weak self] origin in self?.anchor.dragTo(origin: origin) }
+        card.pill.onOpenAll = { [weak self] in self?.onOpenAll?() }
+        card.pill.onCollapse = { [weak self] in self?.onCollapse?() }
+        card.view.onDrag = { [weak self] origin in
+            guard let self else { return }
+            // The dashboard is a window of its own: it goes where it is dragged.
+            if isExpanded { window.setFrameOrigin(origin) } else { anchor.dragTo(origin: origin) }
+        }
         window.delegate = self
         window.invalidateShadow()
     }
@@ -104,7 +116,7 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     func applyLive(_ note: Note) {
         guard active else { return }
         saver.cancel()
-        card.load(note)
+        if isExpanded { pendingLive = note } else { card.load(note) }
     }
 
     /// Show `note`, positioned relative to the tracked window's top-left; `save` persists edits.
@@ -125,7 +137,7 @@ final class NoteWindow: NSObject, NSWindowDelegate {
 
     /// Hide when another window covers the note's spot on the Finder window (and vice versa).
     func setOccluded(_ value: Bool) {
-        guard value != occluded else { return }
+        guard !lifting, value != occluded else { return }
         occluded = value
         applyVisibility()
     }
@@ -142,7 +154,8 @@ final class NoteWindow: NSObject, NSWindowDelegate {
 
     func hide() {
         active = false
-        applyVisibility()
+        // The dashboard stays up; collapsing it sees there is no note left to turn back into.
+        if !lifting { applyVisibility() }
     }
 
     /// The process may terminate before the debounce delay expires.
@@ -198,11 +211,160 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     // MARK: - Tracking
 
     /// The tracked window moved or resized — keep the offset, reposition.
-    func updateWindow(bounds: CGRect) { anchor.updateWindow(bounds: bounds) }
+    func updateWindow(bounds: CGRect) {
+        guard !lifting else { return }
+        anchor.updateWindow(bounds: bounds)
+    }
 
-    func windowDidMove(_ notification: Notification) { anchor.windowDidMove() }
+    // The dashboard moves and resizes the window too; read back as the user's, it would be saved
+    // as the note's new spot and size.
+    func windowDidMove(_ notification: Notification) {
+        if !lifting { anchor.windowDidMove() }
+    }
 
-    func windowDidResize(_ notification: Notification) { anchor.windowDidResize() }
+    func windowDidResize(_ notification: Notification) {
+        if !lifting { anchor.windowDidResize() }
+    }
+
+    // MARK: - Dashboard
+
+    private static let growDuration = 0.38
+    private static let contentFade = 0.18
+    private static let dashboardLevel = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
+
+    /// While this note is the dashboard: what it shows, and what to put back afterwards.
+    private var dashboard: (content: NSView, home: NSRect, limits: (NSSize, NSSize))?
+    var isExpanded: Bool { dashboard != nil }
+    /// The note's own window frame — where the dashboard is, while it is one.
+    var frame: NSRect { window.frame }
+
+    /// The pill's way back from the dashboard: the owner collapses it (and saves what it must first).
+    var onCollapse: (() -> Void)?
+    /// An edit to this note from a dashboard cell, held until the note is a note again — loading
+    /// it into the hidden card now would repaint the pane in the note's colour.
+    private var pendingLive: Note?
+
+    /// The note becomes the Tack dashboard: it lets go of its window, grows into `frame` while
+    /// its colour washes over to `color` and its words fade, and `content` — every note — fades
+    /// in once it has arrived. A window with no note up starts as a small card in the middle.
+    func expand(showing content: NSView, to frame: NSRect, color: NSColor) {
+        guard !isExpanded else { return }
+        lifting = true  // the tracker and the delegate keep their hands off the frame from here
+        let home = window.frame
+        let limits = (window.minSize, window.maxSize)
+        dashboard = (content, home, limits)
+
+        window.contentView?.layer?.removeAnimation(forKey: "pop")
+        window.minSize = NSSize(width: 360, height: 260)
+        window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        window.level = Self.dashboardLevel  // above every other note
+        if shown {
+            card.fadeToPane(color, duration: Self.growDuration)
+        } else {
+            let size = NotePreferences.shared.defaultSize
+            window.setFrame(
+                NSRect(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2,
+                       width: size.width, height: size.height), display: false)
+            card.fadeToPane(color, duration: 0)
+            window.alphaValue = 1
+            window.orderFront(nil)
+        }
+        shown = true
+
+        NSAnimationContext.runAnimationGroup(
+            { ctx in
+                ctx.duration = Self.growDuration
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                window.animator().setFrame(frame, display: true)
+            },
+            completionHandler: { [weak self] in
+                guard let self else { return }
+                mount(content)
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+            })
+    }
+
+    /// Lay the dashboard into the card: the grid under a strip that drags the window. The pill
+    /// stays in the strip's corner — the same glass to hover — now offering the way back.
+    private func mount(_ content: NSView) {
+        let bounds = card.view.bounds
+        let strip: CGFloat = 30
+        content.frame = NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height - strip)
+        content.autoresizingMask = [.width, .height]
+        // Faded out isn't gone: an invisible editor still takes clicks and keystrokes, and the
+        // strip above the grid would be typing into the hidden note.
+        card.editor.view.isHidden = true
+        card.pill.isDashboard = true
+        content.alphaValue = 0
+        card.view.addSubview(content, positioned: .below, relativeTo: card.pill.view)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = Self.contentFade
+            content.animator().alphaValue = 1
+            card.pill.view.animator().alphaValue = 1
+        }
+    }
+
+    /// The dashboard turns back into the note: every note fades out, and the pane shrinks back
+    /// onto the window the note belongs to while its colour and words return. A dashboard that
+    /// was never a note — or whose note has gone meanwhile — shrinks into its middle and is gone.
+    func collapse() {
+        guard let dashboard, !collapsing else { return }
+        collapsing = true
+        NSAnimationContext.runAnimationGroup(
+            { ctx in
+                ctx.duration = Self.contentFade
+                dashboard.content.animator().alphaValue = 0
+                card.pill.view.animator().alphaValue = 0
+            },
+            completionHandler: { [weak self] in
+                guard let self else { return }
+                dashboard.content.removeFromSuperview()
+                card.editor.view.isHidden = false  // still faded out: the shrink brings it back
+                card.pill.isDashboard = false
+                shrink(dashboard)
+            })
+    }
+    private var collapsing = false
+
+    private func shrink(_ dashboard: (content: NSView, home: NSRect, limits: (NSSize, NSSize))) {
+        let returning = active
+        let target: NSRect
+        if returning {
+            target = dashboard.home
+            if let pendingLive { card.load(pendingLive) }  // under the pane; the wash reveals it
+            pendingLive = nil
+            card.fadeFromPane(card.styler.paneColor, duration: Self.growDuration)
+        } else {
+            let f = window.frame
+            target = NSRect(x: f.midX - 40, y: f.midY - 30, width: 80, height: 60)
+        }
+        NSAnimationContext.runAnimationGroup(
+            { ctx in
+                ctx.duration = Self.growDuration
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                window.animator().setFrame(target, display: true)
+                if !returning { window.animator().alphaValue = 0 }
+            },
+            completionHandler: { [weak self] in
+                guard let self else { return }
+                (window.minSize, window.maxSize) = dashboard.limits
+                window.level = .floating
+                self.dashboard = nil
+                collapsing = false
+                lifting = false
+                if returning {
+                    shown = true
+                    occluded = false  // the next tracking frame hides it again if something covers it
+                } else {
+                    window.orderOut(nil)
+                    window.setFrame(dashboard.home, display: false)
+                    window.alphaValue = 1
+                    card.restorePane()
+                    shown = false
+                }
+            })
+    }
 
     // MARK: - Saving
 

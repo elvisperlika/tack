@@ -21,6 +21,24 @@ final class NotePill: NSObject {
     /// A pin level the user picked. The owner moves the note and reports back through
     /// `setPinLevels`, so a move that fails leaves the picker ringing the level it had.
     var onPin: (Int) -> Void = { _ in }
+    /// Open the Tack window on every note. nil hides the dot: a card already *in* that window
+    /// has nowhere to go.
+    var onOpenAll: (() -> Void)?
+    /// Bring forward the app, tab or folder this note lives on. nil hides the dot: a floating
+    /// note is already sitting on it.
+    var onReveal: (() -> Void)?
+    /// Turn the dashboard back into the note — the one resting dot while the note is the dashboard.
+    var onCollapse: () -> Void = {}
+
+    /// The note is the dashboard: the pill keeps its place and its glass, but offers what the
+    /// dashboard does rather than what a note does.
+    var isDashboard = false {
+        didSet {
+            guard isDashboard != oldValue else { return }
+            reset()
+            for (i, dot) in restingDots.enumerated() { dot.frame = Self.dotFrame(index: i) }
+        }
+    }
 
     /// One place a note can be pinned: its level, the menu wording, and the symbol its dot wears.
     typealias PinChoice = (level: Int, label: String, symbol: String)
@@ -29,6 +47,9 @@ final class NotePill: NSObject {
     private let fontDot: NSButton  // wears a "T" in the note's face; opens the face picker
     private let colorDot: NSButton  // wears the note's colour; opens the palette picker
     private let pinDot: NSButton  // wears the current level's symbol; opens the level picker
+    private let allDot: NSButton  // a stack of notes; opens the Tack window on all of them
+    private let backDot: NSButton  // the dashboard's way back to the note
+    private let revealDot: NSButton  // a dashboard card's way to the app it lives on
     private let deleteDot: NSButton  // red: deletes the note
 
     /// Where this note can be pinned, and where it is. Fewer than two is no choice at all, so
@@ -50,7 +71,7 @@ final class NotePill: NSObject {
 
     // Bigger dots in the same pill: the padding and the gap give up what the dots take, so the
     // capsule stays 20pt tall and ~60 wide open.
-    private static let dotSize: CGFloat = 16
+    static let dotSize: CGFloat = 16
     private static let dotGap: CGFloat = 4
     private static let pillPad = NSSize(width: 5, height: 3)
     private static let deleteHex = "FF5F57"  // the red of a window's close button
@@ -60,7 +81,7 @@ final class NotePill: NSObject {
     /// Closed, the pill is a circle — same height, so the `height / 2` corner radius rounds it
     /// the whole way with no second radius to keep in sync.
     static var pillClosedSize: NSSize { NSSize(width: pillOpenSize.height, height: pillOpenSize.height) }
-    static var pillOpenSize: NSSize { pillSize(dots: 3) }
+    static var pillOpenSize: NSSize { pillSize(dots: 5) }  // the most dots the pill shows at rest
 
     /// How many dots a note `width` wide can hold — `pillSize` inverted, so the two can't drift.
     /// Never below 1: a picker with nothing in it would be a dead end.
@@ -118,6 +139,12 @@ final class NotePill: NSObject {
         fontDot = Self.dotButton(index: 0, name: "Font")
         colorDot = Self.dotButton(index: 1, name: "Colour")
         pinDot = Self.dotButton(index: 2, name: "Pin level")
+        allDot = Self.dotButton(index: 2, name: "All notes")
+        allDot.image = Self.symbolDot("rectangle.stack.fill")
+        revealDot = Self.dotButton(index: 2, name: "Open where it lives")
+        revealDot.image = Self.symbolDot("arrow.up.forward.app.fill")
+        backDot = Self.dotButton(index: 0, name: "Back to the note")
+        backDot.image = Self.symbolDot("arrow.down.right.and.arrow.up.left")
         deleteDot = Self.dotButton(index: 2, name: "Delete note")
         deleteDot.image = Self.symbolDot(
             "trash.fill", fill: Swatch.color(fromHex: Self.deleteHex), ink: .white)
@@ -125,10 +152,16 @@ final class NotePill: NSObject {
 
         // One click is the whole gesture for each. Hidden until the pill opens — the clip only
         // hides them from view, and a dot outside the closed pill would still take clicks.
-        for dot in [fontDot, colorDot, pinDot, deleteDot] {
+        for dot in [fontDot, colorDot, pinDot, allDot, revealDot, backDot, deleteDot] {
             dot.isHidden = true
             view.addSubview(dot)
         }
+        backDot.target = self
+        backDot.action = #selector(collapseTapped)
+        revealDot.target = self
+        revealDot.action = #selector(revealTapped)
+        allDot.target = self
+        allDot.action = #selector(openAll)
         pinDot.target = self
         pinDot.action = #selector(pickPin)
         fontDot.target = self
@@ -192,7 +225,9 @@ final class NotePill: NSObject {
     /// The dots the open pill shows at rest. Laid out by position in this list, so the delete
     /// dot simply sits one place further left of the corner when the pin dot is there.
     private var restingDots: [NSButton] {
-        [fontDot, colorDot] + (pinChoices.count > 1 ? [pinDot] : []) + [deleteDot]
+        if isDashboard { return [backDot] }
+        return [fontDot, colorDot] + (pinChoices.count > 1 ? [pinDot] : [])
+            + (onOpenAll != nil ? [allDot] : []) + (onReveal != nil ? [revealDot] : []) + [deleteDot]
     }
 
     /// A dot wearing an SF Symbol: white with a grey glyph for the pin level and its picker, red
@@ -271,7 +306,7 @@ final class NotePill: NSObject {
         if mode == .open { refreshDots() }  // before they're shown, so they arrive current
 
         let shown = shownDots()
-        let gone = spent + [fontDot, colorDot, pinDot, deleteDot].filter { !shown.contains($0) }
+        let gone = spent + [fontDot, colorDot, pinDot, allDot, revealDot, backDot, deleteDot].filter { !shown.contains($0) }
         shown.forEach { $0.isHidden = false }
         // Hide the outgoing dots now, not on completion: a delete dot lingering under the swatches
         // for the length of the animation is a note deleted by accident. Closing is the exception —
@@ -376,6 +411,9 @@ final class NotePill: NSObject {
         set(.open)
     }
     @objc private func deleteTapped() { onDelete() }
+    @objc private func openAll() { onOpenAll?() }
+    @objc private func collapseTapped() { onCollapse() }
+    @objc private func revealTapped() { onReveal?() }
 
     @objc private func fontChosen(_ sender: NSButton) {
         guard let choice = sender as? FontChoiceButton else { return }

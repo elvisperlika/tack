@@ -116,6 +116,44 @@ final class NoteCard: NSObject {
 
     func focus(in window: NSWindow?) { window?.makeFirstResponder(editor.textView) }
 
+    /// The card turning into a plain pane of `color`: the text and the pill fade out while the
+    /// tint washes over. `restorePane` puts the note back exactly as it was.
+    func fadeToPane(_ color: NSColor, duration: TimeInterval) {
+        pill.reset()
+        styler.fade(to: color, duration: duration)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = duration * 0.6  // the words go first; the colour carries the rest
+            editor.view.animator().alphaValue = 0
+            pill.view.animator().alphaValue = 0
+        }
+    }
+
+    /// `fadeToPane` in reverse: from a plain pane of `color`, the note's colour washes back in
+    /// and its words return, last — so they land on a card the size they were written for.
+    func fadeFromPane(_ color: NSColor, duration: TimeInterval) {
+        pill.reset()
+        editor.view.alphaValue = 0
+        pill.view.alphaValue = 0
+        styler.showSolid(color)
+        styler.fadeBack(duration: duration)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = duration * 0.4
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        } completionHandler: { [weak self] in
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = duration * 0.6
+                self?.editor.view.animator().alphaValue = 1
+                self?.pill.view.animator().alphaValue = 1
+            }
+        }
+    }
+
+    func restorePane() {
+        editor.view.alphaValue = 1
+        pill.view.alphaValue = 1
+        styler.restoreColor()
+    }
+
     // MARK: - Choosing a look
 
     /// What choosing a typeface means, whether the pill is previewing one under the cursor or

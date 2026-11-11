@@ -525,7 +525,7 @@ extension SelfTest {
         let symbols = (0...2).map { LevelName.symbol(level: $0, of: 3) }
         assert(Set(symbols).count == 3, "app, window and tab need three different symbols")
         assert(LevelName.symbol(level: 1, of: 2) == symbols[1], "a 2-part path ends at a window")
-        for name in symbols {
+        for name in symbols + ["rectangle.stack.fill", "arrow.up.forward.app.fill", "arrow.down.right.and.arrow.up.left"] {
             let found = NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
             assert(found, "\(name) is not an SF Symbol here — its dot would be blank")
         }

@@ -41,7 +41,33 @@ final class NoteStyler {
     }
 
     /// Back to the colour the note actually has, dropping any preview over it.
-    private func restoreColor() { showColor(Swatch.color(fromHex: colorHex)) }
+    /// Paint `color` solid, at once — where the way back from the Tack window starts.
+    func showSolid(_ color: NSColor) { tintView.layer?.backgroundColor = color.cgColor }
+
+    func restoreColor() { showColor(Swatch.color(fromHex: colorHex)) }
+
+    /// Wash back from a solid pane to the note's own sheer tint — `fade(to:)` in reverse.
+    func fadeBack(duration: TimeInterval) {
+        fade(to: Swatch.color(fromHex: colorHex).withAlphaComponent(Self.tintAlpha), duration: duration)
+    }
+
+    /// Wash the tint over to `color`, solid — the note turning into the Tack window's own
+    /// background. Explicit, because AppKit switches off implicit animation on a view's layer.
+    /// The solid colour the last `fade(to:)` washed over to.
+    private(set) var paneColor = NSColor.windowBackgroundColor
+
+    func fade(to color: NSColor, duration: TimeInterval) {
+        paneColor = color
+        guard let layer = tintView.layer else { return }
+        let target = color.cgColor
+        let wash = CABasicAnimation(keyPath: "backgroundColor")
+        wash.fromValue = layer.presentation()?.backgroundColor ?? layer.backgroundColor
+        wash.toValue = target
+        wash.duration = duration
+        wash.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(wash, forKey: "wash")
+        layer.backgroundColor = target
+    }
 
     /// Keep `color` as the note's own, and show it.
     func commitColor(_ color: NSColor) {

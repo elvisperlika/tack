@@ -51,10 +51,7 @@ extension AppDelegate {
 
     /// Opens the Tack window on every note. The floating notes are flushed first: each can be up
     /// to a debounce behind the disk the grid is about to read.
-    @objc func openTack() {
-        notes.values.forEach { $0.window.flushPendingSave() }
-        openGrid()
-    }
+    @objc func openTack() { openDashboard(from: nil) }
 
     /// Terminates Tack through AppKit, which first asks the app delegate to flush pending saves.
     @objc func quit() { NSApp.terminate(nil) }

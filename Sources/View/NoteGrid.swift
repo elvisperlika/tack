@@ -1,12 +1,14 @@
 import AppKit
 
-/// Every note Tack holds, laid out side by side — the window behind "Open Tack".
+/// Every note Tack holds, laid out side by side — what a note shows when it grows into the
+/// Tack dashboard. Only the contents: there is no window of its own, the note *is* the window.
 ///
 /// Each cell is a real `NoteCard`, not a picture of one: the same glass, the same markdown, the
 /// same hover pill. What a cell may change is exactly what a card owns — text, colour, face —
 /// so browsing the grid can never move or resize a note on the window it belongs to.
-final class NoteGrid: NSObject, NSWindowDelegate {
-    private let window: NSWindow
+final class NoteGrid: NSObject {
+    /// The scrolling grid, to mount in whatever note is showing the dashboard.
+    let view: NSScrollView
     private let wrap = WrapView()
     private var cells: [NoteGridCell] = []
     private var placeholder: NSTextField?
@@ -14,50 +16,20 @@ final class NoteGrid: NSObject, NSWindowDelegate {
 
     /// An edit made in the dashboard, as it lands — for the floating note showing the same one.
     var onLiveEdit: ((String, Note) -> Void)?
+    /// A cell brought the app its note lives on to the front.
+    var onReveal: (() -> Void)?
 
     init(onError: @escaping (Error) -> Void) {
         self.onError = onError
-        window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered,
-            defer: false)
-        window.title = "Tack"
-        window.setFrameAutosaveName("tackMain")  // unchanged key: keeps the placeholder's frame
-        window.center()
-        window.isReleasedWhenClosed = false
-
-        // The cards frost what is behind them *within* this window, so the window has to give
-        // them something to frost — a clear background would blur straight through to the desktop.
-        let backdrop = NSVisualEffectView(frame: NSRect(origin: .zero, size: window.frame.size))
-        backdrop.material = .underWindowBackground
-        backdrop.state = .followsWindowActiveState
-        backdrop.autoresizingMask = [.width, .height]
-
-        let scroll = NSScrollView(frame: backdrop.bounds)
-        scroll.autoresizingMask = [.width, .height]
-        scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        wrap.frame = NSRect(origin: .zero, size: scroll.contentSize)
+        view = NSScrollView(frame: NSRect(x: 0, y: 0, width: 760, height: 520))
+        view.autoresizingMask = [.width, .height]
+        view.drawsBackground = false
+        view.hasVerticalScroller = true
+        view.autohidesScrollers = true
+        wrap.frame = NSRect(origin: .zero, size: view.contentSize)
         wrap.autoresizingMask = [.width]  // the clip view owns the width; layout() sets the height
-        scroll.documentView = wrap
-        backdrop.addSubview(scroll)
-        window.contentView = backdrop
+        view.documentView = wrap
         super.init()
-        window.delegate = self
-    }
-
-    /// Re-read both stores and rebuild. Cheap enough at the note counts involved.
-    /// ponytail: no live sync with the floating note — reopening the grid is the refresh. Add an
-    /// observer if the two ever sit side by side for long.
-    func open() {
-        reload()
-        // Tack is an agent (`LSUIElement`), which has no Dock icon and can't properly own a
-        // window. While this one is up it becomes an ordinary app — Dock icon, menu bar, ⌘Tab —
-        // and goes back to being an agent when the window closes. Set before the window is
-        // ordered in, or it comes up behind whatever was frontmost.
-        NSApp.setActivationPolicy(.regular)
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     func reload() {
@@ -104,6 +76,7 @@ final class NoteGrid: NSObject, NSWindowDelegate {
         cell.onError = onError
         cell.onDelete = { [weak self] cell in self?.drop(cell) }
         cell.onLiveEdit = { [weak self] key, note in self?.onLiveEdit?(key, note) }
+        cell.onReveal = { [weak self] in self?.onReveal?() }
         setPlaceholder(false)
         cells.append(cell)
         wrap.addSubview(cell)
@@ -137,13 +110,6 @@ final class NoteGrid: NSObject, NSWindowDelegate {
         label.sizeToFit()
         wrap.addSubview(label)
         placeholder = label
-    }
-
-    /// Closing is not quitting: pending edits still have to reach disk, and Tack goes back to
-    /// being a menu-bar agent rather than leaving a Dock icon behind with no window under it.
-    func windowWillClose(_ notification: Notification) {
-        flush()
-        NSApp.setActivationPolicy(.accessory)
     }
 }
 
@@ -190,6 +156,7 @@ private final class NoteGridCell: NSView {
     var onError: (Error) -> Void = { _ in }
     var onDelete: (NoteGridCell) -> Void = { _ in }
     var onLiveEdit: (String, Note) -> Void = { _, _ in }
+    var onReveal: () -> Void = {}
 
     var key: String { stored.key }
 
@@ -209,11 +176,14 @@ private final class NoteGridCell: NSView {
         card.view.autoresizingMask = []  // cells don't resize; the note keeps the size it has
         addSubview(card.view)
         header.setFrameOrigin(NSPoint(x: 2, y: size.height + Self.headerGap))
-        header.onOpen = { [key = stored.key] in Container.reveal(key: key) }
         addSubview(header)
         card.load(stored.note)
         card.onEdit = { [weak self] in self?.scheduleSave() }
         card.onDelete = { [weak self] in self?.deleteConfirmed() }
+        card.pill.onReveal = { [weak self] in
+            guard let self, Container.reveal(key: key) else { return }
+            onReveal()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("not from a nib") }
@@ -229,12 +199,19 @@ private final class NoteGridCell: NSView {
 
     /// Which app, and which window, tab or folder inside it — wrapped over as many lines as the
     /// path needs, so none of it ends in an ellipsis. The full key stays the tooltip.
-    private static func header(for key: String, width: CGFloat) -> PathLabel {
+    private static func header(for key: String, width: CGFloat) -> NSTextField {
         let text = "\(Container.scopeName(for: key)) · \(Container.label(for: key))"
-        let label = PathLabel(wrappingLabelWithString: text)
-        label.isSelectable = false  // the whole line is one click target, not selectable text
-        label.toolTip = key + "\n⌘-click to open it"
-        label.attributedStringValue = PathLabel.styled(text, asLink: false)
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.isSelectable = false
+        label.toolTip = key
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byCharWrapping  // a URL has no spaces to break at
+        label.attributedStringValue = NSAttributedString(
+            string: text,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11), .paragraphStyle: paragraph,
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ])
         let bounds = NSRect(x: 0, y: 0, width: width, height: .greatestFiniteMagnitude)
         let height = label.cell?.cellSize(forBounds: bounds).height ?? 16
         label.frame = NSRect(x: 2, y: 0, width: width, height: ceil(height))
@@ -280,75 +257,5 @@ private final class NoteGridCell: NSView {
         saver.cancel()  // a stale delayed save must not recreate the note that just went
         onLiveEdit(stored.key, deletion)  // and its floating twin goes with it
         onDelete(self)
-    }
-}
-
-/// The header line, as a link: hold ⌘ over it and it turns blue and underlined, ⌘-click and the
-/// app, tab or folder the note lives on comes forward.
-///
-/// ⌘ is watched with a local monitor rather than `flagsChanged`, which only reaches the first
-/// responder — a label in a grid never is one. The monitor exists only while the mouse is
-/// actually over this label, so at most one is installed at a time.
-private final class PathLabel: NSTextField {
-    var onOpen: () -> Void = {}
-
-    private var monitor: Any?
-    private var armed = false {
-        didSet {
-            guard armed != oldValue else { return }
-            attributedStringValue = Self.styled(stringValue, asLink: armed)
-            armed ? NSCursor.pointingHand.push() : NSCursor.pop()
-        }
-    }
-
-    static func styled(_ text: String, asLink: Bool) -> NSAttributedString {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byCharWrapping  // a URL has no spaces to break at
-        var attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11),
-            .paragraphStyle: paragraph,
-            .foregroundColor: asLink ? NSColor.linkColor : NSColor.secondaryLabelColor,
-        ]
-        if asLink { attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue }
-        return NSAttributedString(string: text, attributes: attrs)
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(
-            NSTrackingArea(
-                rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-                owner: self))
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        armed = event.modifierFlags.contains(.command)
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            self?.armed = event.modifierFlags.contains(.command)
-            return event
-        }
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        armed = false
-        stopWatching()
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        guard event.modifierFlags.contains(.command) else { return super.mouseDown(with: event) }
-        onOpen()
-    }
-
-    /// The grid drops cells without the mouse ever leaving them — on a reload, or when a note is
-    /// deleted out from under the pointer — so the monitor and the cursor are unwound here too.
-    private func stopWatching() {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
-    }
-
-    deinit {
-        if armed { NSCursor.pop() }
-        stopWatching()
     }
 }
