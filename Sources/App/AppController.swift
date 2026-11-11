@@ -56,6 +56,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             if let id = app?.bundleIdentifier { self?.hideNote(app: id) }
         }
+
+        // The tracking link belongs to one screen. Unplug that screen and it may never fire again, and nothing else would start a new one: `startTracking` only does when there is none.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, trackLink != nil else { return }
+            trackLink = nil
+            startTracking()
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
