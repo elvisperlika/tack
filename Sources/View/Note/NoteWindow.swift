@@ -325,12 +325,13 @@ final class NoteWindow: NSObject, NSWindowDelegate {
             })
     }
 
-    /// Lay the dashboard into the card: the grid under a strip that drags the window. The pill
+    /// Lay the dashboard into the card: the grid, under a strip that drags the window. The pill
     /// stays in the strip's corner — the same glass to hover — now offering the way back.
     private func mount(_ content: NSView) {
         let bounds = card.view.bounds
-        let strip: CGFloat = 30
-        content.frame = NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height - strip)
+        // The whole card: a page that scrolls (the grid) runs up under the strip and fades there;
+        // one that doesn't (settings) just centres in it.
+        content.frame = bounds
         content.autoresizingMask = [.width, .height]
         // Faded out isn't gone: an invisible editor still takes clicks and keystrokes, and the
         // strip above the grid would be typing into the hidden note.

@@ -7,8 +7,12 @@ import AppKit
 /// same hover pill. What a cell may change is exactly what a card owns — text, colour, face —
 /// so browsing the grid can never move or resize a note on the window it belongs to.
 final class NoteGrid: NSObject {
-    /// The scrolling grid, to mount in whatever note is showing the dashboard.
-    let view: NSScrollView
+    /// The dashboard's top strip, which it is dragged by and the pill sits in.
+    static let strip: CGFloat = 30
+
+    /// The scrolling grid, to mount in whatever note is showing the dashboard — over the whole
+    /// card, strip included.
+    let view: FocusScrollView
     private let wrap = WrapView()
     private var cells: [NoteGridCell] = []
     /// The card last clicked: the one that scrolls its own text, and sits lifted off the rest.
@@ -38,11 +42,13 @@ final class NoteGrid: NSObject {
 
     init(onError: @escaping (Error) -> Void) {
         self.onError = onError
-        view = NSScrollView(frame: NSRect(x: 0, y: 0, width: 760, height: 520))
+        view = FocusScrollView(frame: NSRect(x: 0, y: 0, width: 760, height: 520))
+        view.topBand = Self.strip  // cards scroll up under the strip the dashboard is dragged by
+        view.bottomFade = 16
         view.autoresizingMask = [.width, .height]
         view.drawsBackground = false
-        view.hasVerticalScroller = true
-        view.autohidesScrollers = true
+        // No scroller to see: the wheel and the trackpad still scroll, like a note's own text.
+        view.hasVerticalScroller = false
         wrap.frame = NSRect(origin: .zero, size: view.contentSize)
         wrap.autoresizingMask = [.width]  // the clip view owns the width; layout() sets the height
         view.documentView = wrap
@@ -167,6 +173,11 @@ private final class WrapView: NSView {
 
     override func mouseDown(with event: NSEvent) { onPress() }
 
+    /// The cards that already have a place. A card arriving (a reload, a new note) is put down
+    /// where it belongs; only one that already sat somewhere slides to its new spot — otherwise
+    /// every card of a fresh grid would fly in from the corner.
+    private let placed = NSHashTable<NSView>.weakObjects()
+
     override func layout() {
         super.layout()
         let gap = Self.gap
@@ -177,17 +188,35 @@ private final class WrapView: NSView {
                 y += rowHeight + gap
                 rowHeight = 0
             }
-            sub.setFrameOrigin(NSPoint(x: x, y: y))
+            place(sub, at: NSPoint(x: x, y: y))
             x += sub.frame.width + gap
             rowHeight = max(rowHeight, sub.frame.height)
         }
         // At least as tall as what the scroll view shows: the empty space under the last row is
         // still the grid, and a click there has to reach it (to drop the focus) rather than
         // fall through to the card behind.
-        let height = max(y + rowHeight + gap, enclosingScrollView?.contentSize.height ?? 0)
+        let shown = enclosingScrollView.map { $0.contentSize.height - $0.contentInsets.top - $0.contentInsets.bottom } ?? 0
+        let height = max(y + rowHeight + gap, shown)
         // Guarded: setFrameSize re-enters layout, and an unconditional set would never settle.
         if abs(frame.height - height) > 0.5 {
             setFrameSize(NSSize(width: frame.width, height: height))
+        }
+    }
+
+    /// The window was resized, or a card came or went, and the rows broke differently: the
+    /// cards that moved glide to their new places. During a live resize each layout pass picks
+    /// the move up from wherever the card is, so they trail the window's edge and settle.
+    private func place(_ sub: NSView, at origin: NSPoint) {
+        guard placed.contains(sub) else {
+            placed.add(sub)
+            return sub.setFrameOrigin(origin)
+        }
+        guard sub.frame.origin != origin else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.28
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            ctx.allowsImplicitAnimation = true
+            sub.animator().setFrameOrigin(origin)
         }
     }
 }
@@ -246,6 +275,18 @@ private final class NoteGridCell: NSView {
     private static let liftScale: CGFloat = 1.03
     private static let liftDuration = 0.18
 
+    /// The lifted card's shadow, on a layer of its own under the card. Cut out where the card is:
+    /// the card is glass, and a shadow cast under it shows straight through and darkens it.
+    private lazy var liftShadow: CALayer = {
+        let shadow = CALayer()
+        shadow.shadowColor = NSColor.black.cgColor
+        shadow.shadowOffset = CGSize(width: 0, height: -6)
+        shadow.shadowRadius = 14
+        shadow.shadowOpacity = 0
+        layer?.insertSublayer(shadow, at: 0)  // below the card
+        return shadow
+    }()
+
     /// Picked up or put down. Picked up, the card grows a touch about its own centre and casts a
     /// deeper shadow, as if lifted off the page — and it is the one card whose text scrolls.
     func setFocused(_ focused: Bool) {
@@ -257,25 +298,33 @@ private final class NoteGridCell: NSView {
         var lift = CATransform3DMakeTranslation(card.midX, card.midY, 0)
         lift = CATransform3DScale(lift, Self.liftScale, Self.liftScale, 1)
         lift = CATransform3DTranslate(lift, -card.midX, -card.midY, 0)
-        layer.shadowPath = CGPath(
-            roundedRect: card, cornerWidth: 12, cornerHeight: 12, transform: nil)
-        layer.shadowColor = NSColor.black.cgColor
-        layer.shadowOffset = CGSize(width: 0, height: -6)
-        layer.shadowRadius = 14
+        let outline = CGPath(roundedRect: card, cornerWidth: 12, cornerHeight: 12, transform: nil)
+        liftShadow.frame = bounds
+        liftShadow.shadowPath = outline
+        // Everything around the card, and nothing inside it (even-odd: the card is a hole).
+        let around = CGMutablePath()
+        around.addRect(bounds.insetBy(dx: -40, dy: -40))
+        around.addPath(outline)
+        let cutout = CAShapeLayer()
+        cutout.path = around
+        cutout.fillRule = .evenOdd
+        liftShadow.mask = cutout
         layer.zPosition = focused ? 1 : 0  // over its neighbours, without reordering the grid
 
         let to: (transform: CATransform3D, opacity: Float) =
             focused ? (lift, 0.22) : (CATransform3DIdentity, 0)
-        for (key, value) in [("transform", to.transform as Any), ("shadowOpacity", to.opacity as Any)] {
+        for (target, key, value) in [
+            (layer, "transform", to.transform as Any), (liftShadow, "shadowOpacity", to.opacity as Any),
+        ] {
             let move = CABasicAnimation(keyPath: key)
-            move.fromValue = layer.presentation()?.value(forKeyPath: key) ?? layer.value(forKeyPath: key)
+            move.fromValue = target.presentation()?.value(forKeyPath: key) ?? target.value(forKeyPath: key)
             move.toValue = value
             move.duration = Self.liftDuration
             move.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            layer.add(move, forKey: key)
+            target.add(move, forKey: key)
         }
         layer.transform = to.transform
-        layer.shadowOpacity = to.opacity
+        liftShadow.shadowOpacity = to.opacity
     }
 
     /// The note at the size it was left at, floored by the same minimum a real note has.

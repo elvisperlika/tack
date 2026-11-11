@@ -72,7 +72,10 @@ final class NoteCard: NSObject {
         // Editable text: the full card below the drag strip.
         // ponytail: no inset for the pill — closed it's a dot in a corner and the text is meant to
         // blur under it; reserving a line's worth of space for it on every note costs more.
-        editor = NoteEditor(frame: NSRect(x: 4, y: 4, width: w - 8, height: h - Self.strip - 4))
+        // Edge to edge, under the strip too: the text starts below it and fades through it.
+        editor = NoteEditor(frame: NSRect(x: 4, y: 0, width: w - 8, height: h))
+        editor.view.topBand = Self.strip
+        editor.view.bottomFade = 8
         view.addSubview(editor.view)
 
         pill = NotePill(cardWidth: w, cardHeight: h, styler: styler)
