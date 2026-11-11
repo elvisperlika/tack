@@ -158,6 +158,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             guard moved else { return false }
             box.value = newLevel  // redirect this note's later edits — same cell the save closure reads
+            // The dashboard knows a note by its key, and the key just changed: left alone, its
+            // cell would write the note back under the old one on the next edit there.
+            self.grid?.reload()
             return true
         }
         apply(f)
