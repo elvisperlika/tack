@@ -8,6 +8,9 @@ final class ShownNote {
     var container: Container?
     var level = LevelBox(0)  // see LevelBox
     var lastBounds: CGRect?  // where the tracked window was at the last sample
+    /// The note as Tack last read or wrote it — what a save compares the file against, so it
+    /// never writes over a newer one (see Note.merge).
+    var seen: Note?
     var stillFrames = 0  // samples since it last moved — see samples(stillFrames:)
 
     /// The storage key of the note on screen. Computed: a pin change moves the note to another
@@ -40,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             self?.pollTarget()
+            self?.syncFromDisk()
         }
         pollTimer?.tolerance = 0.1  // lets macOS line this wake-up up with others
         updater.start()
@@ -205,8 +209,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         entry.lastBounds = nil
         entry.stillFrames = 0  // a note just shown tracks at full rate from its first frame
         let note = entry.window
-        note.show(note: n, bounds: f.bounds) { [weak self] edited in
-            self?.persist { try container.write(edited, at: box.value) } ?? false
+        entry.seen = n
+        note.show(note: n, bounds: f.bounds) { [weak self, weak entry] edited in
+            guard let self else { return false }
+            return persist {
+                // Never over a newer file: a script may have rewritten it since — see Note.merge.
+                let toWrite = Note.merge(
+                    mine: edited, seen: entry?.seen, disk: try container.note(at: box.value))
+                try container.write(toWrite, at: box.value)
+                entry?.seen = toWrite
+                if toWrite != edited { self.cascade(key: container.key(at: box.value), note: toWrite) }
+            }
         }
         // Only an open dashboard cares, and only it knows this note by its storage key.
         note.onLiveEdit = { [weak self] edited in
@@ -250,6 +263,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reportPersistenceError(error)
             return false
         }
+    }
+
+    // MARK: - Changes from outside
+
+    /// Modification dates of the note files on screen, as last looked at.
+    private var fileDates: [URL: Date?] = [:]
+
+    /// Every poll: has a file behind a note on screen — a floating note, or a card in an open
+    /// dashboard — changed since the last look? Then those notes are read again and shown.
+    /// A date per file, not a watcher: one stat per file per poll is nothing, it survives the
+    /// write-to-a-temp-file-and-rename most tools do, and Finder notes live in many folders.
+    private func syncFromDisk() {
+        var onScreen = notes.values.compactMap(\.key)
+        if dashboardNote != nil { onScreen += grid.keys }
+        var keysByFile: [URL: Set<String>] = [:]
+        for key in onScreen {
+            if let url = StoredNote.fileURL(of: key) { keysByFile[url, default: []].insert(key) }
+        }
+        // The dashboard also gains notes a script adds to the central store.
+        if dashboardNote != nil, let store = AppNotes.storeURL, keysByFile[store] == nil {
+            keysByFile[store] = []
+        }
+
+        for (url, keys) in keysByFile {
+            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate
+            let known = fileDates[url]
+            fileDates[url] = date
+            guard let known, known != date else { continue }  // first look only records the date
+            var changed = keys
+            if url == AppNotes.storeURL, dashboardNote != nil, let all = try? AppNotes.all() {
+                changed.formUnion(all.keys)
+            }
+            for key in changed {
+                guard let disk = try? StoredNote.load(key: key) else {
+                    adoptFromDisk(key: key, note: nil)
+                    continue
+                }
+                adoptFromDisk(key: key, note: disk)
+            }
+        }
+    }
+
+    /// One note changed on disk: the floating note showing it adopts it unless the user is mid-edit
+    /// there, and the dashboard follows (`cascade`). nil: the note was deleted there.
+    private func adoptFromDisk(key: String, note: Note?) {
+        if let entry = notes.values.first(where: { $0.key == key }) {
+            if !entry.window.hasPendingEdit {
+                entry.seen = note
+                if let note {
+                    if entry.window.currentNote != note { entry.window.applyLive(note) }
+                } else {
+                    hide(entry)
+                }
+            }
+        }
+        if dashboardNote != nil { grid.adoptFromDisk(key: key, note: note) }
+    }
+
+    /// Put `note` on every view of it — the floating note and the dashboard's card — because a
+    /// save kept words from the file over the ones on screen.
+    private func cascade(key: String, note: Note) {
+        notes.values.first { $0.key == key }?.window.applyLive(note)
+        if dashboardNote != nil { grid.update(key: key, note: note) }
     }
 
     // MARK: - Dashboard

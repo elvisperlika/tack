@@ -9,6 +9,9 @@ final class Debouncer {
 
     init(delay: TimeInterval) { self.delay = delay }
 
+    /// Something is waiting to run — for a note, an edit not yet on disk.
+    var isPending: Bool { pending != nil }
+
     func call(_ block: @escaping () -> Bool) {
         generation += 1
         let scheduled = generation
