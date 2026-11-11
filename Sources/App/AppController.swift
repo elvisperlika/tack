@@ -148,7 +148,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         shownKey = { container.key(at: box.value) }
         let choices = container.pinLevels.map {
-            (level: $0, label: LevelName.label(level: $0, of: container.path.count))
+            (
+                level: $0, label: LevelName.label(level: $0, of: container.path.count),
+                symbol: LevelName.symbol(level: $0, of: container.path.count)
+            )
         }
         note.setPinLevels(choices, current: level) { [weak self] newLevel in
             guard let self = self else { return false }

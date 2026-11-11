@@ -103,7 +103,10 @@ enum NoteFont: String, CaseIterable {
             attributes: [
                 .font: font(ofSize: height - 5), .foregroundColor: NSColor.black.withAlphaComponent(0.65),
             ])
-        let box = label.size()
+        let glyph = NSImage(size: label.size(), flipped: false) { _ in
+            label.draw(at: .zero)
+            return true
+        }
         let img = NSImage(size: NSSize(width: width, height: height))
         img.lockFocus()
         let rect = NSRect(x: 1, y: 1, width: width - 2, height: height - 2)
@@ -113,7 +116,7 @@ enum NoteFont: String, CaseIterable {
         NSColor.black.withAlphaComponent(0.15).setStroke()
         path.lineWidth = borderWidth
         path.stroke()
-        label.draw(at: NSPoint(x: (width - box.width) / 2, y: (height - box.height) / 2))
+        glyph.drawInkCentered(in: NSRect(x: 0, y: 0, width: width, height: height))
         img.unlockFocus()
         return img
     }

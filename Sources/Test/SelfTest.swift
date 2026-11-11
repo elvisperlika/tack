@@ -43,6 +43,7 @@ enum SelfTest {
         notePreferencesPalette()
         fontFaces()
         pillGeometry()
+        dotGlyphsAreCentred()
         print("✅ all self-tests passed")
     }
 
@@ -519,6 +520,14 @@ extension SelfTest {
     static func levelLabels() {
         // 3-part path (a browser tab): app / window / tab
         assert(LevelName.label(level: 0, of: 3) == "Pin to this app", "level 0 is always the app")
+        // The pill's picker wears one symbol per level: distinct, and real on this macOS.
+        let symbols = (0...2).map { LevelName.symbol(level: $0, of: 3) }
+        assert(Set(symbols).count == 3, "app, window and tab need three different symbols")
+        assert(LevelName.symbol(level: 1, of: 2) == symbols[1], "a 2-part path ends at a window")
+        for name in symbols {
+            let found = NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
+            assert(found, "\(name) is not an SF Symbol here — its dot would be blank")
+        }
         assert(LevelName.label(level: 1, of: 3) == "Pin to this window", "middle is the window")
         assert(LevelName.label(level: 2, of: 3) == "Pin to this tab", "deepest of 3 is the tab")
 
@@ -762,6 +771,37 @@ extension SelfTest {
 
     /// The pill's two shapes: a circle at rest, wider when hovered, and never wider than the
     /// narrowest note it has to sit in.
+    /// Every glyph a pill dot wears — the "T" of each face and each SF Symbol — must sit in the
+    /// middle of its dot by what is actually drawn, not by its padded box.
+    static func dotGlyphsAreCentred() {
+        let square = NSImage(size: NSSize(width: 10, height: 10), flipped: false) { _ in
+            NSColor.black.setFill()
+            NSRect(x: 2, y: 3, width: 4, height: 5).fill()
+            return true
+        }
+        assert(square.inkBounds == NSRect(x: 2, y: 3, width: 4, height: 5), "ink is what is drawn: \(square.inkBounds)")
+
+        let glyphs: [(String, NSImage)] =
+            NoteFont.allCases.map { face in
+                let label = NSAttributedString(string: "T", attributes: [.font: face.font(ofSize: 11)])
+                return ("T in \(face)", NSImage(size: label.size(), flipped: false) { _ in label.draw(at: .zero); return true })
+            }
+            + ["trash.fill", "square.grid.2x2.fill", "macwindow", "doc.fill"].map { name in
+                (name, NSImage(systemSymbolName: name, accessibilityDescription: nil)!
+                    .withSymbolConfiguration(.init(pointSize: 8, weight: .semibold))!)
+            }
+        for (name, glyph) in glyphs {
+            let canvas = NSRect(x: 0, y: 0, width: 16, height: 16)
+            let placed = NSImage(size: canvas.size, flipped: false) { rect in
+                glyph.drawInkCentered(in: rect)
+                return true
+            }
+            let ink = placed.inkBounds
+            let off = max(abs(ink.midX - canvas.midX), abs(ink.midY - canvas.midY))
+            assert(off <= 0.25, "\(name) is \(off)pt off-centre in its dot: \(ink)")
+        }
+    }
+
     static func pillGeometry() {
         let closed = NotePill.pillClosedSize
         assert(closed.width == closed.height, "closed, the pill should be a circle: \(closed)")

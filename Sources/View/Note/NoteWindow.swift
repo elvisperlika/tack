@@ -15,15 +15,10 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     /// Where the note sits: the offset it keeps from the tracked window, and the size it wants.
     private let anchor: NoteAnchor
     private let card: NoteCard
-    private lazy var paletteMenu = PaletteMenu { [weak self] in
-        self?.card.choose(color: $0, commit: true)
-    }
 
     /// The pin levels the note can move between, pushed by the controller so NoteWindow stays
-    /// ignorant of Container — the same split as the colour menu, which owns *how* one is chosen
-    /// while the controller owns what it *means*.
-    private var pinChoices: [(level: Int, label: String)] = []
-    private var pinCurrent = 0
+    /// ignorant of Container: the pill owns *how* one is chosen, the controller what it *means*.
+    private var pinChoices: [NotePill.PinChoice] = []
     private var onPickLevel: (Int) -> Bool = { _ in true }
     private let saver = Debouncer(delay: 0.5)  // collapse typing/drag bursts into one write
 
@@ -63,56 +58,30 @@ final class NoteWindow: NSObject, NSWindowDelegate {
         anchor.onChange = { [weak self] in self?.scheduleSave() }
         card.onEdit = { [weak self] in self?.scheduleSave() }
         card.onDelete = { [weak self] in self?.deleteConfirmed() }
+        card.pill.onPin = { [weak self] level in self?.pick(level: level) }
         card.view.onDrag = { [weak self] origin in self?.anchor.dragTo(origin: origin) }
-        card.view.contextMenu = { [weak self] in self?.buildMenu() }
         window.delegate = self
         window.invalidateShadow()
     }
 
-    // MARK: - Note menu
+    // MARK: - Pin level
 
     /// The scopes this note can pin to. The controller pushes them (with the current one) on
-    /// every show; `< 2` means nothing to choose, so the menu skips the pin section — matching
-    /// Finder, which has one level.
+    /// every show; the pill shows its pin dot only when there are at least two.
     func setPinLevels(
-        _ choices: [(level: Int, label: String)], current: Int,
+        _ choices: [NotePill.PinChoice], current: Int,
         onPick: @escaping (Int) -> Bool
     ) {
         pinChoices = choices
-        pinCurrent = current
         onPickLevel = onPick
+        card.pill.setPinLevels(choices, current: current)
     }
 
-    /// What the dots don't cover, on right-click: the palette itself (add / remove a colour) and
-    /// the pin level. Rebuilt per open so both are always current.
-    private func buildMenu() -> NSMenu {
-        let menu = NSMenu()
-        let color = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
-        color.image = Swatch.image(hex: card.styler.colorHex)
-        color.submenu = paletteMenu.menu(currentHex: card.styler.colorHex)
-        menu.addItem(color)
-        if pinChoices.count >= 2 {
-            let pin = NSMenuItem(title: "Pin", action: nil, keyEquivalent: "")
-            pin.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pin level")
-            let sub = NSMenu()
-            for choice in pinChoices {
-                let item = NSMenuItem(
-                    title: choice.label, action: #selector(levelChosen(_:)), keyEquivalent: "")
-                item.target = self
-                item.tag = choice.level
-                item.state = choice.level == pinCurrent ? .on : .off
-                sub.addItem(item)
-            }
-            pin.submenu = sub
-            menu.addItem(pin)
-        }
-        return menu
-    }
-
-    @objc private func levelChosen(_ sender: NSMenuItem) {
+    /// Move the note to `level`, picked from the pill's pin dot.
+    private func pick(level: Int) {
         guard saver.flush() else { return }  // never move an older version after a failed save
-        guard onPickLevel(sender.tag) else { return }
-        pinCurrent = sender.tag
+        guard onPickLevel(level) else { return }
+        card.pill.setPinLevels(pinChoices, current: level)  // the picker rings the new level
     }
 
     // MARK: - Show / hide

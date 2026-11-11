@@ -112,6 +112,13 @@ enum LevelName {
         if count > 2 && level == count - 1 { return "Pin to this tab" }
         return "Pin to this window"
     }
+
+    /// The SF Symbol the pill's level picker wears for the same level — same rule as `label`.
+    static func symbol(level: Int, of count: Int) -> String {
+        if level == 0 { return "square.grid.2x2.fill" }
+        if count > 2 && level == count - 1 { return "doc.fill" }
+        return "macwindow"
+    }
 }
 
 /// The level a shown note saves to. A reference cell rather than a plain Int because

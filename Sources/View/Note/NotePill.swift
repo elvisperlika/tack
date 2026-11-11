@@ -2,8 +2,8 @@ import AppKit
 
 /// The note's control cluster, parked in the card's top-right corner. One control instead of
 /// three things scattered over the card: at rest it's a bare glass dot; the cursor reaching it
-/// opens it leftwards to uncover three dots — typeface, colour, delete — and clicking either of
-/// the first two opens that dot's picker in place. It *floats* over the text throughout, the way
+/// opens it leftwards to uncover its dots — typeface, colour, pin level, delete — and clicking
+/// any but the last opens that dot's picker in place. It *floats* over the text throughout, the way
 /// iOS's new bars do — the note's own words blur under it, so nothing is carved out for it.
 ///
 /// It reads `styler` to know what is currently chosen (which dot to wear, which choice to ring)
@@ -18,17 +18,33 @@ final class NotePill: NSObject {
     /// A colour the user is hovering (`commit: false`) or has chosen (`true`).
     var onColor: (NSColor, Bool) -> Void = { _, _ in }
     var onDelete: () -> Void = {}
+    /// A pin level the user picked. The owner moves the note and reports back through
+    /// `setPinLevels`, so a move that fails leaves the picker ringing the level it had.
+    var onPin: (Int) -> Void = { _ in }
+
+    /// One place a note can be pinned: its level, the menu wording, and the symbol its dot wears.
+    typealias PinChoice = (level: Int, label: String, symbol: String)
 
     private let styler: NoteStyler  // read-only: what is currently chosen
     private let fontDot: NSButton  // wears a "T" in the note's face; opens the face picker
     private let colorDot: NSButton  // wears the note's colour; opens the palette picker
+    private let pinDot: NSButton  // wears the current level's symbol; opens the level picker
     private let deleteDot: NSButton  // red: deletes the note
 
-    /// What the pill is showing. `.font` / `.color` are the picker: the pill widens and the three
-    /// dots give way to the choices, which is why this is a mode and not a bool.
-    private enum Mode { case closed, open, font, color }
+    /// Where this note can be pinned, and where it is. Fewer than two is no choice at all, so
+    /// the pin dot stays away — a Finder note, or a card in the Tack window.
+    private var pinChoices: [PinChoice] = []
+    private var pinCurrent = 0
+
+    /// What the pill is showing. `.font` / `.color` / `.pin` are the picker: the pill widens and
+    /// the resting dots give way to the choices, which is why this is a mode and not a bool.
+    private enum Mode { case closed, open, font, color, pin }
     private var mode = Mode.closed
     private var choiceDots: [NSButton] = []  // the picker's dots, built per opening
+    /// A hovered face or colour is showing on the note without being chosen. It stays up while
+    /// the cursor crosses the gaps between dots — snapping back to the chosen one in every gap
+    /// flickered — and is put back only when the cursor leaves the pill or the picker closes.
+    private var previewing = false
 
     // MARK: - Geometry
 
@@ -101,18 +117,20 @@ final class NotePill: NSObject {
         view = Self.capsule(cardWidth: cardWidth, cardHeight: cardHeight)
         fontDot = Self.dotButton(index: 0, name: "Font")
         colorDot = Self.dotButton(index: 1, name: "Colour")
+        pinDot = Self.dotButton(index: 2, name: "Pin level")
         deleteDot = Self.dotButton(index: 2, name: "Delete note")
-        deleteDot.image = Swatch.image(
-            hex: Self.deleteHex, size: Self.dotSize, radius: Self.dotSize / 2)
+        deleteDot.image = Self.symbolDot(
+            "trash.fill", fill: Swatch.color(fromHex: Self.deleteHex), ink: .white)
         super.init()
 
-        // One click is the whole gesture for each; the rarer choices (editing the palette, the
-        // pin level) are a right-click on the card. Hidden until the pill opens — the clip only
+        // One click is the whole gesture for each. Hidden until the pill opens — the clip only
         // hides them from view, and a dot outside the closed pill would still take clicks.
-        for dot in [fontDot, colorDot, deleteDot] {
+        for dot in [fontDot, colorDot, pinDot, deleteDot] {
             dot.isHidden = true
             view.addSubview(dot)
         }
+        pinDot.target = self
+        pinDot.action = #selector(pickPin)
         fontDot.target = self
         fontDot.action = #selector(pickFont)
         colorDot.target = self
@@ -127,8 +145,10 @@ final class NotePill: NSObject {
         view.onHover = { [weak self] inside in
             guard let self else { return }
             if !inside {
-                // Only the bare three dots follow the cursor away. A picker is a question already
-                // asked: it stays up until it's answered, or until a click on the card drops it.
+                // Only the resting dots follow the cursor away. A picker is a question already
+                // asked: it stays up until it's answered, or until a click on the card drops it —
+                // but whatever it was previewing goes back.
+                endPreview()
                 if mode == .open { set(.closed) }
             } else if mode == .closed {
                 set(.open)
@@ -143,9 +163,65 @@ final class NotePill: NSObject {
     /// The window is reused between notes: never arrive already open.
     func reset() { set(.closed, animated: false) }
 
+    /// Put the note's own face or colour back over a hover preview. No-op when nothing is
+    /// previewed, so a plain open and close never re-renders the text.
+    private func endPreview() {
+        guard previewing else { return }
+        previewing = false
+        switch mode {
+        case .font: onFont(styler.family, false)
+        case .color: onColor(Swatch.color(fromHex: styler.colorHex), false)
+        default: break
+        }
+    }
+
+    /// The levels the shown note can be pinned at, and the one it is at now. Pushed on every
+    /// show and after every move, always while the picker is shut, so nothing needs redrawing.
+    func setPinLevels(_ choices: [PinChoice], current: Int) {
+        pinChoices = choices
+        pinCurrent = current
+        // Like the font and colour dots, the pin dot wears what is chosen: the current level.
+        let chosen = choices.first { $0.level == current }
+        pinDot.image = chosen.map { Self.symbolDot($0.symbol) }
+        pinDot.toolTip = chosen?.label
+        // Placed now, unanimated: the window is reused, and a delete dot left one slot over by
+        // the previous note would otherwise slide into place the first time the pill opens.
+        for (i, dot) in restingDots.enumerated() { dot.frame = Self.dotFrame(index: i) }
+    }
+
+    /// The dots the open pill shows at rest. Laid out by position in this list, so the delete
+    /// dot simply sits one place further left of the corner when the pin dot is there.
+    private var restingDots: [NSButton] {
+        [fontDot, colorDot] + (pinChoices.count > 1 ? [pinDot] : []) + [deleteDot]
+    }
+
+    /// A dot wearing an SF Symbol: white with a grey glyph for the pin level and its picker, red
+    /// with a white bin for delete. The glyph is centred by its ink — see `drawInkCentered`.
+    static func symbolDot(
+        _ name: String, borderWidth: CGFloat = 1,
+        fill: NSColor = NSColor.white.withAlphaComponent(0.75),
+        ink: NSColor = NSColor.black.withAlphaComponent(0.65)
+    ) -> NSImage {
+        let size = dotSize
+        let config = NSImage.SymbolConfiguration(pointSize: size - 8, weight: .semibold)
+            .applying(.init(paletteColors: [ink]))
+        let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        return NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            let circle = NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: size - 2, height: size - 2))
+            fill.setFill()
+            circle.fill()
+            NSColor.black.withAlphaComponent(0.15).setStroke()
+            circle.lineWidth = borderWidth
+            circle.stroke()
+            symbol?.drawInkCentered(in: rect)
+            return true
+        }
+    }
+
     /// The two dots that wear the current choice. Full strength on the colour one: it's the
-    /// colour's label, not another sheer wash of it. Refreshed whenever the three dots are about
-    /// to be shown, so a colour chosen from the card's right-click menu lands here too.
+    /// colour's label, not another sheer wash of it. Refreshed whenever the resting dots are
+    /// about to be shown, so they always arrive current.
     func refreshDots() {
         fontDot.image = styler.family.dotImage(size: Self.dotSize)
         colorDot.image = Swatch.image(
@@ -158,8 +234,8 @@ final class NotePill: NSObject {
     private func shownDots() -> [NSButton] {
         switch mode {
         case .closed: return []
-        case .open: return [fontDot, colorDot, deleteDot]
-        case .font, .color: return choiceDots
+        case .open: return restingDots
+        case .font, .color, .pin: return choiceDots
         }
     }
 
@@ -182,18 +258,20 @@ final class NotePill: NSObject {
     /// width and one layout serve the three dots and both pickers alike.
     private func set(_ mode: Mode, animated: Bool = true) {
         guard mode != self.mode else { return }
+        endPreview()  // read against the mode being left, before it changes
         self.mode = mode
         let spent = choiceDots  // the picker dots the previous mode built; dropped once faded out
         switch mode {
         case .closed, .open: choiceDots = []
         case .font: choiceDots = fontChoices()
         case .color: choiceDots = colorChoices()
+        case .pin: choiceDots = pinDots()
         }
         choiceDots.forEach(view.addSubview)
         if mode == .open { refreshDots() }  // before they're shown, so they arrive current
 
         let shown = shownDots()
-        let gone = spent + [fontDot, colorDot, deleteDot].filter { !shown.contains($0) }
+        let gone = spent + [fontDot, colorDot, pinDot, deleteDot].filter { !shown.contains($0) }
         shown.forEach { $0.isHidden = false }
         // Hide the outgoing dots now, not on completion: a delete dot lingering under the swatches
         // for the length of the animation is a note deleted by accident. Closing is the exception —
@@ -229,15 +307,17 @@ final class NotePill: NSObject {
             b.target = self
             b.action = #selector(fontChosen(_:))
             b.onHover = { [weak self] inside in
-                guard let self else { return }
-                onFont(inside ? face : styler.family, false)
+                guard let self, inside else { return }  // leaving a dot keeps its preview
+                previewing = true
+                onFont(face, false)
             }
             return b
         }
     }
 
-    /// One dot per palette colour. ponytail: colours past what the note is wide enough to hold are
-    /// dropped — the right-click grid is the full palette, and it scrolls with the menu.
+    /// One dot per palette colour. shortcut: colours past what the note is wide enough to hold
+    /// are dropped, and nothing else lists them; wrap the strip onto a second row if palettes
+    /// that long turn up.
     private func colorChoices() -> [NSButton] {
         // The superview is the note's card; it is only nil before the pill is mounted.
         let card = view.superview?.bounds.width ?? NotePreferences.shared.defaultSize.width
@@ -262,10 +342,25 @@ final class NotePill: NSObject {
                 animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 layer.add(animation, forKey: "hoverScale")
                 layer.transform = target
-                onColor(Swatch.color(fromHex: inside ? hex : styler.colorHex), false)
+                guard inside else { return }  // leaving a dot keeps its preview
+                previewing = true
+                onColor(Swatch.color(fromHex: hex), false)
             }
             b.target = self
             b.action = #selector(colorChosen(_:))
+            return b
+        }
+    }
+
+    /// One dot per level the note can be pinned at; the current one wears the heavier ring,
+    /// like the chosen face and colour do. No hover preview: a level has nothing to show early.
+    private func pinDots() -> [NSButton] {
+        pinChoices.enumerated().map { i, choice in
+            let b = Self.dotButton(index: i, name: choice.label)
+            b.image = Self.symbolDot(choice.symbol, borderWidth: choice.level == pinCurrent ? 2 : 1)
+            b.tag = choice.level
+            b.target = self
+            b.action = #selector(pinChosen(_:))
             return b
         }
     }
@@ -274,16 +369,24 @@ final class NotePill: NSObject {
 
     @objc private func pickFont() { set(.font) }
     @objc private func pickColor() { set(.color) }
+    @objc private func pickPin() { set(.pin) }
+
+    @objc private func pinChosen(_ sender: NSButton) {
+        onPin(sender.tag)
+        set(.open)
+    }
     @objc private func deleteTapped() { onDelete() }
 
     @objc private func fontChosen(_ sender: NSButton) {
         guard let choice = sender as? FontChoiceButton else { return }
+        previewing = false  // a commit is not a preview to put back
         onFont(choice.face, true)
         set(.open)
     }
 
     @objc private func colorChosen(_ sender: NSButton) {
         guard let swatch = sender as? ColorSwatchButton else { return }
+        previewing = false  // a commit is not a preview to put back
         onColor(Swatch.color(fromHex: swatch.hex), true)
         set(.open)
     }

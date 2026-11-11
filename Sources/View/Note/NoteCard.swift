@@ -9,7 +9,7 @@ import AppKit
 /// `note(keeping:)` is for: the card writes only the three fields it actually owns, and the
 /// owner's placement survives verbatim.
 final class NoteCard: NSObject {
-    /// The card. Mount it anywhere; the owner may add `onDrag` and `contextMenu` of its own.
+    /// The card. Mount it anywhere; the owner may add an `onDrag` of its own.
     let view: DragGlassView
     let editor: NoteEditor  // the text, its markdown rules, and the only writer to it
     let styler: NoteStyler  // the note's colour and typeface, and the tint that shows one
@@ -131,8 +131,7 @@ final class NoteCard: NSObject {
         onEdit()
     }
 
-    /// The same, for a colour — from a swatch under the cursor, a swatch click, or live from the
-    /// system colour panel behind the card's right-click menu.
+    /// The same, for a colour — from a swatch under the cursor, or a swatch click.
     func choose(color: NSColor, commit: Bool) {
         if commit { styler.commitColor(color) } else { styler.showColor(color) }
         guard commit else { return }

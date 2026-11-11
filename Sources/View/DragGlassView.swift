@@ -6,7 +6,6 @@ import AppKit
 final class DragGlassView: NSVisualEffectView {
     var onDrag: ((NSPoint) -> Void)?  // proposed window origin, Cocoa coords
     var onPress: (() -> Void)?  // a click anywhere on the card: dismisses an open picker
-    var contextMenu: (() -> NSMenu?)?  // right-click on the card: palette editing and pin level
     // nil unless a drag actually began on the glass. A mouseDragged with no grab is one that
     // bubbled up the responder chain — e.g. a checkbox click in the text view, whose mouseDown we
     // handled without consuming the gesture. Acting on it would drag the note with a stale offset,
@@ -27,6 +26,4 @@ final class DragGlassView: NSVisualEffectView {
     }
 
     override func mouseUp(with event: NSEvent) { grab = nil }
-
-    override func menu(for event: NSEvent) -> NSMenu? { contextMenu?() }
 }
