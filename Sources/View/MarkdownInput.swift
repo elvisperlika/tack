@@ -83,9 +83,7 @@ enum MarkdownInput {
         let lineNow = ns2.lineRange(for: NSRange(location: line.location, length: 0))
         let contentLen = lineNow.length - (ns2.substring(with: lineNow).hasSuffix("\n") ? 1 : 0)
         if contentLen > 0 {
-            ts.setAttributes(
-                MarkdownStyle.attributes(inline: nil, heading: level),
-                range: NSRange(location: lineNow.location, length: contentLen))
+            setHeading(level, ts, NSRange(location: lineNow.location, length: contentLen))
         }
         tv.typingAttributes = MarkdownStyle.attributes(inline: nil, heading: level)
         tv.setSelectedRange(NSRange(location: line.location, length: 0))
@@ -178,9 +176,15 @@ enum MarkdownInput {
         guard tv.shouldChangeText(in: sel, replacementString: nil) else { return }
         let next: InlineStyle? = wholeSelectionHas(ts, sel, style) ? nil : style
         ts.beginEditing()
+        // A strike draws with an attribute of its own, which the style replacing it won't clear.
+        ts.enumerateAttribute(.tackInline, in: sel) { value, r, _ in
+            if value as? String == InlineStyle.strike.rawValue {
+                ts.removeAttribute(.strikethroughStyle, range: r)
+            }
+        }
         // Per heading-run, so a heading keeps its level while its inline style toggles.
         ts.enumerateAttribute(.tackHeading, in: sel) { value, r, _ in
-            ts.setAttributes(MarkdownStyle.attributes(inline: next, heading: value as? Int), range: r)
+            restyle(ts, r, inline: next, heading: value as? Int)
         }
         ts.endEditing()
         tv.didChangeText()
@@ -238,7 +242,7 @@ enum MarkdownInput {
             let contentLen = line.length - (lineText.hasSuffix("\n") ? 1 : 0)
             let range = NSRange(location: line.location, length: contentLen)
             guard tv.shouldChangeText(in: range, replacementString: nil) else { return true }
-            ts.setAttributes(MarkdownStyle.base, range: range)
+            setHeading(nil, ts, range)
             tv.didChangeText()
             tv.typingAttributes = MarkdownStyle.base
             return true
@@ -268,6 +272,28 @@ enum MarkdownInput {
         tv.typingAttributes = MarkdownStyle.base
         tv.setSelectedRange(NSRange(location: caret, length: 0))
         return true
+    }
+
+    /// Dress `range` in one inline style and one block level, touching only what a style owns.
+    /// Never `setAttributes`: that replaces *everything* on the range, and a list marker is an
+    /// attachment plus a `.tackList` mark — ⌘B over a list used to erase its bullets and boxes.
+    private static func restyle(_ ts: NSTextStorage, _ range: NSRange, inline: InlineStyle?, heading: Int?) {
+        var look = MarkdownStyle.visual(inline: inline, heading: heading)
+        look[.foregroundColor] = nil  // a ticked todo keeps its dimmed text
+        ts.addAttributes(look, range: range)
+        mark(ts, .tackInline, inline?.rawValue, range)
+        mark(ts, .tackHeading, heading, range)
+    }
+
+    private static func mark(_ ts: NSTextStorage, _ key: NSAttributedString.Key, _ value: Any?, _ range: NSRange) {
+        if let value { ts.addAttribute(key, value: value, range: range) } else { ts.removeAttribute(key, range: range) }
+    }
+
+    /// Make `range` a heading, or body for nil, keeping the bold, italic and code runs inside it.
+    private static func setHeading(_ level: Int?, _ ts: NSTextStorage, _ range: NSRange) {
+        ts.enumerateAttribute(.tackInline, in: range) { value, r, _ in
+            restyle(ts, r, inline: (value as? String).flatMap(InlineStyle.init), heading: level)
+        }
     }
 
     private static func headingLevel(_ ts: NSTextStorage, at loc: Int) -> Int? {

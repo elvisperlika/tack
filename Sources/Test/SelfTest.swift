@@ -29,6 +29,7 @@ enum SelfTest {
         markdownSpans()
         markdownParse()
         markdownListEditing()
+        inlineToggleKeepsListMarkers()
         markdownRoundTrip()
         markdownInlineClosing()
         blockStyleAtCaret()
@@ -758,6 +759,27 @@ extension SelfTest {
             "Enter should continue a bullet list")
         assert(ListGlyph.at(ts, 7) == .bullet, "continued list should use a bullet attachment")
         assert(MarkdownDocument.serialize(ts) == "- milk\n- ", "live bullet list should serialize")
+    }
+
+    /// ⌘B over a list used to replace every attribute in the selection, list markers included.
+    static func inlineToggleKeepsListMarkers() {
+        let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let source = "# t\n- a\n- [x] b"
+        tv.textStorage?.setAttributedString(MarkdownDocument.parse(source))
+        tv.setSelectedRange(NSRange(location: 0, length: (tv.string as NSString).length))
+        MarkdownInput.toggle(.bold, tv)
+        let bold = tv.textStorage.map(MarkdownDocument.serialize)
+        assert(bold == "# **t**\n- **a**\n- [x] **b**", "bold must keep headings and markers: \(bold ?? "")")
+        MarkdownInput.toggle(.bold, tv)
+        let plain = tv.textStorage.map(MarkdownDocument.serialize)
+        assert(plain == source, "toggling back must restore the note: \(plain ?? "")")
+
+        // Un-heading a line keeps the bold inside it.
+        tv.textStorage?.setAttributedString(MarkdownDocument.parse("# a **b**"))
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        _ = MarkdownInput.handle(#selector(NSStandardKeyBindingResponding.deleteBackward(_:)), tv)
+        let body = tv.textStorage.map(MarkdownDocument.serialize)
+        assert(body == "a **b**", "backspace at a heading's start must keep inline styles: \(body ?? "")")
     }
 
     static func markdownRoundTrip() {
