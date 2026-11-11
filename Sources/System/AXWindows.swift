@@ -8,6 +8,16 @@ enum AXWindows {
         _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
 
+    /// Every AX read is a synchronous call into another app, made on our main thread, and the
+    /// default wait for an answer is about six seconds — so an app that hung took Tack's menu
+    /// and notes down with it. Set on the system-wide element, which makes it the limit for
+    /// every element this process talks to.
+    /// shortcut: one second for all apps; a slow app reads as "no window" for that poll and is
+    /// retried on the next. Lower it if a hung app still makes Tack stutter.
+    static func limitWaiting() {
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1)
+    }
+
     /// Just the bounds — used as a fallback when the notification-based tracker isn't up.
     static func focusedBounds(pid: pid_t) -> CGRect? {
         focusedWindow(pid: pid).flatMap(bounds(of:))

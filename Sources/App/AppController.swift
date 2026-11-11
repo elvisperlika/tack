@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installEditMenu()
         note.onDelete = { [weak self] in self?.stopTracking() }
         AXWindows.promptForPermission()  // needed to bind notes to non-Finder app windows
+        AXWindows.limitWaiting()
 
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             self?.pollTarget()
