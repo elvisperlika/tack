@@ -15,6 +15,8 @@ extension AppDelegate {
         menu.addItem(.separator())
         menu.addItem(makeItem("Open Tack", #selector(openTack), symbol: "macwindow", key: "o"))
         menu.addItem(.separator())
+        menu.addItem(
+            makeItem("Check for Updates…", #selector(checkForUpdates), symbol: "arrow.down.circle", key: ""))
         menu.addItem(makeItem("Quit Tack", #selector(quit), symbol: "power", key: "q"))
         menu.items.forEach { $0.target = self }
         item.menu = menu
@@ -52,6 +54,8 @@ extension AppDelegate {
     /// Opens the Tack window on every note. The floating notes are flushed first: each can be up
     /// to a debounce behind the disk the grid is about to read.
     @objc func openTack() { openDashboard(from: nil) }
+
+    @objc func checkForUpdates() { updater.check(quietly: false) }
 
     /// Terminates Tack through AppKit, which first asks the app delegate to flush pending saves.
     @objc func quit() { NSApp.terminate(nil) }

@@ -67,6 +67,7 @@ final class NoteWindow: NSObject, NSWindowDelegate {
         card.pill.onPin = { [weak self] level in self?.pick(level: level) }
         card.pill.onOpenAll = { [weak self] in self?.onOpenAll?() }
         card.pill.onCollapse = { [weak self] in self?.onCollapse?() }
+        card.pill.onSettings = { [weak self] in self?.onSettings?() }
         card.view.onDrag = { [weak self] origin in
             guard let self else { return }
             // The dashboard is a window of its own: it goes where it is dragged.
@@ -238,6 +239,8 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     /// The note's own window frame — where the dashboard is, while it is one.
     var frame: NSRect { window.frame }
 
+    /// The pill's settings dot: the owner decides which page to show next.
+    var onSettings: (() -> Void)?
     /// The pill's way back from the dashboard: the owner collapses it (and saves what it must first).
     var onCollapse: (() -> Void)?
     /// An edit to this note from a dashboard cell, held until the note is a note again — loading
@@ -296,6 +299,7 @@ final class NoteWindow: NSObject, NSWindowDelegate {
         // strip above the grid would be typing into the hidden note.
         card.editor.view.isHidden = true
         card.pill.isDashboard = true
+        card.pill.showingSettings = false  // a dashboard always opens on its notes
         content.alphaValue = 0
         card.view.addSubview(content, positioned: .below, relativeTo: card.pill.view)
         NSAnimationContext.runAnimationGroup { ctx in
@@ -303,6 +307,28 @@ final class NoteWindow: NSObject, NSWindowDelegate {
             content.animator().alphaValue = 1
             card.pill.view.animator().alphaValue = 1
         }
+    }
+
+    /// Swap what the dashboard shows — its notes, or the settings page — with a cross-fade, in
+    /// the same place. `settings` tells the pill which page is now up.
+    func showPage(_ page: NSView, settings: Bool) {
+        guard let current = dashboard?.content, current !== page, !collapsing else { return }
+        page.frame = current.frame
+        page.autoresizingMask = [.width, .height]
+        page.alphaValue = 0
+        card.view.addSubview(page, positioned: .below, relativeTo: card.pill.view)
+        dashboard?.content = page
+        card.pill.showingSettings = settings
+        NSAnimationContext.runAnimationGroup(
+            { ctx in
+                ctx.duration = Self.contentFade
+                current.animator().alphaValue = 0
+                page.animator().alphaValue = 1
+            },
+            completionHandler: {
+                current.removeFromSuperview()
+                current.alphaValue = 1  // ready for the next time it is shown
+            })
     }
 
     /// The dashboard turns back into the note: every note fades out, and the pane shrinks back

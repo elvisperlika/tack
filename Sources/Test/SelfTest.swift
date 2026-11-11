@@ -40,6 +40,8 @@ enum SelfTest {
         backspaceAtTheEnd()
         noteSizeIsOptional()
         urlNormalization()
+        updateVersions()
+        updateReleaseParsing()
         treePathIsRemembered()
         notePreferencesPalette()
         fontFaces()
@@ -525,7 +527,7 @@ extension SelfTest {
         let symbols = (0...2).map { LevelName.symbol(level: $0, of: 3) }
         assert(Set(symbols).count == 3, "app, window and tab need three different symbols")
         assert(LevelName.symbol(level: 1, of: 2) == symbols[1], "a 2-part path ends at a window")
-        for name in symbols + ["rectangle.stack.fill", "arrow.up.forward.app.fill", "arrow.down.right.and.arrow.up.left"] {
+        for name in symbols + ["rectangle.stack.fill", "arrow.up.forward.app.fill", "arrow.down.right.and.arrow.up.left", "gearshape.fill"] {
             let found = NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
             assert(found, "\(name) is not an SF Symbol here — its dot would be blank")
         }
@@ -753,6 +755,36 @@ extension SelfTest {
         let folder = CGRect(x: 61, y: 288, width: 1160, height: 745)
         assert(FinderWatcher.near(folder, folder.offsetBy(dx: 1, dy: 0)), "rounding slack")
         assert(!FinderWatcher.near(folder, folder.offsetBy(dx: 40, dy: 0)), "another window is not it")
+    }
+
+    static func updateVersions() {
+        assert(Updater.isNewer("1.10.0", than: "1.9.2"), "versions compare as numbers, not text")
+        assert(Updater.isNewer("v1.7.0", than: "1.6.0"), "a tag's v is ignored")
+        assert(Updater.isNewer("2.0.0", than: "1.99.99"), "major wins")
+        assert(!Updater.isNewer("1.6.0", than: "1.6.0"), "the same version is no update")
+        assert(!Updater.isNewer("1.7", than: "1.7.0"), "a missing part is 0")
+        assert(!Updater.isNewer("1.5.9", than: "1.6.0"), "an older release is no update")
+        assert(Updater.isNewer("0.0.1", than: "garbage"), "an unreadable installed version is 0.0.0")
+    }
+
+    static func updateReleaseParsing() {
+        let json = Data("""
+            {"tag_name": "v1.7.0", "html_url": "https://github.com/o/r/releases/tag/v1.7.0",
+             "assets": [
+               {"name": "Tack-v1.7.0-intel.zip", "browser_download_url": "https://x/intel.zip"},
+               {"name": "Tack-v1.7.0-apple-silicon.zip", "browser_download_url": "https://x/arm.zip"}]}
+            """.utf8)
+        let arm = try! Updater.release(from: json, appleSilicon: true)
+        assert(arm?.version == "1.7.0", "the version drops the tag's v: \(String(describing: arm))")
+        assert(arm?.download.absoluteString == "https://x/arm.zip", "Apple silicon gets its own zip")
+        let intel = try! Updater.release(from: json, appleSilicon: false)
+        assert(intel?.download.absoluteString == "https://x/intel.zip", "Intel gets its own zip")
+
+        let half = Data(#"{"tag_name": "v1.8.0", "html_url": "https://x", "assets": []}"#.utf8)
+        assert(try! Updater.release(from: half, appleSilicon: true) == nil, "no zip yet is no update")
+
+        let repo = Data(#"{"name": "tack", "stargazers_count": 42, "forks_count": 3}"#.utf8)
+        assert(try! Updater.stars(from: repo) == 42, "the star count comes from stargazers_count")
     }
 
     static func markdownRoundTrip() {

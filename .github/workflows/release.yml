@@ -92,10 +92,47 @@ jobs:
         with:
           ref: ${{ needs.tag.outputs.tag }}
 
+      # One certificate signs every release, so macOS keeps Tack's Accessibility and Automation
+      # grants across updates instead of asking again each time. Made once with
+      # scripts/make-signing-cert.sh. Without the secrets, the build falls back to ad-hoc signing.
+      - name: Import signing certificate
+        id: cert
+        env:
+          P12: ${{ secrets.TACK_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.TACK_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$P12" ]; then
+            echo "No signing certificate secret: signing ad-hoc"
+            echo "id=-" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KC="$RUNNER_TEMP/tack-signing.keychain-db"
+          security create-keychain -p ci "$KC"
+          security set-keychain-settings "$KC"   # no auto-lock mid-build
+          security unlock-keychain -p ci "$KC"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/tack.p12"
+          security import "$RUNNER_TEMP/tack.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC" > /dev/null
+          rm "$RUNNER_TEMP/tack.p12"
+          # codesign refuses an identity macOS doesn't trust for code signing, and a self-signed
+          # certificate is trusted only once it is told to be.
+          security find-certificate -c "Tack Release" -p "$KC" > "$RUNNER_TEMP/tack.pem"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$RUNNER_TEMP/tack.pem"
+          ID=$(security find-identity -v -p codesigning "$KC" | awk '/"Tack Release"/ {print $2; exit}')
+          [ -n "$ID" ] || { echo "Tack Release identity not usable for code signing" >&2; exit 1; }
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+          echo "keychain=$KC" >> "$GITHUB_OUTPUT"
+
       # bundle.sh rebuilds Tack.app from scratch; ditto keeps the bundle's structure/metadata intact.
       - name: Build Tack.app (${{ matrix.label }})
+        env:
+          SIGN_ID: ${{ steps.cert.outputs.id }}
+          SIGN_KEYCHAIN: ${{ steps.cert.outputs.keychain }}
+          TAG: ${{ needs.tag.outputs.tag }}
         run: |
-          BUILD_FLAGS="--arch ${{ matrix.arch }}" SIGN_ID=- ./bundle.sh
+          BUILD_FLAGS="--arch ${{ matrix.arch }}" VERSION="${TAG#v}" ./bundle.sh
           ditto -c -k --keepParent Tack.app "Tack-${{ needs.tag.outputs.tag }}-${{ matrix.label }}.zip"
 
       - uses: actions/upload-artifact@v4

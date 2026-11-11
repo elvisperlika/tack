@@ -36,7 +36,9 @@ If you want a scratchpad, Stickies is fine. Tack is for notes that belong to a p
 
 Grab the zip for your Mac from the [latest release](../../releases/latest), `apple-silicon` for M-series or `intel` for Intel, unzip it, and right-click → Open the first time.
 
-Releases are built by GitHub's CI, which has no Apple Developer certificate, so the app is ad-hoc signed and not notarized. Gatekeeper calls it an "unidentified developer", and right-click → Open is the built-in way past that warning, once per download. Same cause, second symptom: an ad-hoc signature is unique per build and macOS ties permission grants to it, so after an update macOS re-asks for the permissions below. Everything else, your notes included, carries over untouched.
+Releases are built by GitHub's CI without an Apple Developer certificate, so the app is not notarized: Gatekeeper calls it an "unidentified developer", and right-click → Open is the built-in way past that warning, the first time. Every release is signed with the same Tack certificate, so macOS keeps the permissions below across updates (coming from v1.6.0 or older, it asks once more).
+
+Tack updates itself. Once a day it checks GitHub for a newer release and asks before installing it, and 📌 → Check for Updates… looks right away. It downloads the build for your Mac's chip, replaces itself and restarts. Your notes are not touched.
 
 Building from source avoids both if you have any codesigning identity in your keychain. `bundle.sh` picks the first one and keeps the signature stable across rebuilds, and the permission grants with it:
 

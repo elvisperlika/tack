@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (its window is reused), so "showing" is `container != nil`, not membership.
     private(set) var notes: [String: ShownNote] = [:]
     private var statusItem: NSStatusItem?
+    let updater = Updater()
     private var pollTimer: Timer?  // slow: which surface is focused (~0.4s)
     private var trackLink: CADisplayLink? {  // vsync glue: each shown note follows its window
         didSet { oldValue?.invalidate() }  // an outlived link would keep firing
@@ -41,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.pollTarget()
         }
         pollTimer?.tolerance = 0.1  // lets macOS line this wake-up up with others
+        updater.start()
 
         // A note outlives its app's focus now, so nothing else would ever take it down when the
         // app quits: its window just vanishes from the list and the note would wait for it forever.
@@ -268,6 +270,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The note that is the dashboard right now, if one is.
     private weak var dashboardNote: NoteWindow?
+    /// The dashboard's other page, built the first time it is asked for.
+    private lazy var settingsPage = SettingsView()
+    private var onSettingsPage = false
+
     /// Becomes the dashboard when it is opened from the menu bar with no note on screen to grow.
     private lazy var looseNote = NoteWindow()
 
@@ -283,6 +289,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let host = note ?? notes[front].flatMap { $0.container == nil ? nil : $0.window } ?? looseNote
         grid.reload()
         host.onCollapse = { [weak self] in self?.closeDashboard() }
+        host.onSettings = { [weak self, weak host] in
+            guard let self, let host else { return }
+            onSettingsPage.toggle()
+            host.showPage(onSettingsPage ? settingsPage : grid.view, settings: onSettingsPage)
+        }
+        onSettingsPage = false
         host.expand(showing: grid.view, to: dashboardFrame(near: host.frame), color: Self.dashboardColor)
         dashboardNote = host
     }
