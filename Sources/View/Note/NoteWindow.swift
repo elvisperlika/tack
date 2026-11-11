@@ -139,9 +139,10 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     }
 
     /// Show `note`, positioned relative to the tracked window's top-left; `save` persists edits.
-    @discardableResult
-    func show(note: Note, bounds: CGRect, save: @escaping (Note) -> Bool) -> Bool {
-        guard saver.flush() else { return false }
+    func show(note: Note, bounds: CGRect, save: @escaping (Note) -> Bool) {
+        // A save that keeps failing (a read-only folder) must not hold every other note hostage.
+        // The save handler has already told the user, so the edit that can't land is dropped.
+        if !saver.flush() { saver.cancel() }
         self.saveHandler = save
         active = true
         occluded = false  // re-evaluated on the next tracking frame
@@ -151,7 +152,6 @@ final class NoteWindow: NSObject, NSWindowDelegate {
         // going through applyVisibility — otherwise the incoming note would just teleport in.
         shown = true
         popIn()
-        return true
     }
 
     /// Hide when another window covers the note's spot on the Finder window (and vice versa).

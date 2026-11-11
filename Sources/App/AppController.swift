@@ -32,7 +32,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        note.flushPendingSave() && (grid?.flush() ?? true) ? .terminateNow : .terminateCancel
+        // Both are flushed before either is judged: `&&` would skip the grid after a failed note.
+        let noteSaved = note.flushPendingSave()
+        let gridSaved = grid?.flush() ?? true
+        if noteSaved && gridSaved { return .terminateNow }
+        // Refusing outright made Quit a dead button for as long as the save kept failing.
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Some edits could not be saved"
+        alert.informativeText = "Quitting now loses them."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Quit Anyway")
+        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
     }
 
     // MARK: - Target resolution
@@ -72,9 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         do {
             if let hit = try container.load() {
-                guard showNote(hit.note, frame: f, container: container, level: hit.level) else {
-                    return
-                }
+                showNote(hit.note, frame: f, container: container, level: hit.level)
             } else {
                 hideNote()
             }
@@ -110,13 +119,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Show / hide
 
-    @discardableResult
-    func showNote(_ n: Note, frame f: Frame, container: Container, level: Int) -> Bool {
+    func showNote(_ n: Note, frame f: Frame, container: Container, level: Int) {
         let box = LevelBox(level)  // this note's own level cell — see LevelBox
-        let shown = note.show(note: n, bounds: f.bounds) { [weak self] edited in
+        note.show(note: n, bounds: f.bounds) { [weak self] edited in
             self?.persist { try container.write(edited, at: box.value) } ?? false
         }
-        guard shown else { return false }
         // Only an open dashboard cares, and only it knows this note by its storage key.
         note.onLiveEdit = { [weak self] edited in
             self?.grid?.update(key: container.key(at: box.value), note: edited)
@@ -137,7 +144,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         apply(f)
         startTracking()
-        return true
     }
 
     @discardableResult

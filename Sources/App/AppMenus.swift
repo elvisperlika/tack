@@ -41,10 +41,9 @@ extension AppDelegate {
             return
         }
         let start = Coord.center(note: NotePreferences.shared.defaultSize, window: f.bounds.size)
-        guard showNote(
+        showNote(
             hit?.note ?? Note(text: "", dx: start.dx, dy: start.dy), frame: f, container: container,
             level: hit?.level ?? container.finestLevel)  // finest available, promote later
-        else { return }
         current = container
         NSApp.activate(ignoringOtherApps: true)
         note.focusForEditing()
