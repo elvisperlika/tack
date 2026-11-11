@@ -28,6 +28,12 @@ class Container {
     /// mutable components. Browser and Terminal tabs provide this; ordinary containers do not.
     var finestKey: String? { nil }
 
+    /// The levels the pin menu offers. A surface with a stable tab key (a browser, Terminal)
+    /// knows its *window* only by a title that changes with every tab switch or command, so a
+    /// note pinned there would vanish at once — the window level is left out for those.
+    /// Notes already saved at it still load; this only stops new ones.
+    var pinLevels: [Int] { (minLevel...finestLevel).filter { $0 != 1 || finestKey == nil } }
+
     /// The note key for a prefix of `path`. Pure, and the format is a compatibility
     /// guarantee: at the finest level of a 2-part path it reproduces the pre-Container
     /// key exactly, so existing appnotes.json files keep resolving.

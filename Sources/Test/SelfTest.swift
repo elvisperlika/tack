@@ -559,6 +559,9 @@ extension SelfTest {
         assert(old == nil, "the old key should be gone after promotion")
         assert(promoted == n, "the note should live at the window level now")
         assert(loaded?.level == 1, "and lookup should find it there")
+        assert(c.pinLevels == [0, 1, 2], "a plain surface offers every level")
+        let tabbed = FakeContainer(path: ["app", "title", "url"], finestKey: "app|url")
+        assert(tabbed.pinLevels == [0, 2], "a title-keyed window is not a place to pin")
 
         let other = Note(text: "other", dx: 0, dy: 0)
         try! c.write(other, at: 0)

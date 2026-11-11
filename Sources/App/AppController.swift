@@ -147,7 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.grid?.update(key: container.key(at: box.value), note: edited)
         }
         shownKey = { container.key(at: box.value) }
-        let choices = (container.minLevel...container.finestLevel).map {
+        let choices = container.pinLevels.map {
             (level: $0, label: LevelName.label(level: $0, of: container.path.count))
         }
         note.setPinLevels(choices, current: level) { [weak self] newLevel in
