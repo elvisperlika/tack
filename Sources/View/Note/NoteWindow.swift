@@ -441,11 +441,19 @@ final class NoteWindow: NSObject, NSWindowDelegate {
 
     /// The one place a whole note is assembled: the card says what it says and how it looks,
     /// this adds where it sits — neither half can build one alone.
-    private func scheduleSave() {
-        let note = card.note(keeping: Note(
+    /// The note as it stands on screen, placement included — what a save would write.
+    var currentNote: Note {
+        card.note(keeping: Note(
             text: "", dx: anchor.dx, dy: anchor.dy,
             // intended size, not the capped one
             w: Double(anchor.desired.width), h: Double(anchor.desired.height)))
+    }
+
+    /// An edit is waiting for its save: the user is mid-typing or mid-drag.
+    var hasPendingEdit: Bool { saver.isPending }
+
+    private func scheduleSave() {
+        let note = currentNote
         // snapshot: an in-flight save must use the handler — and level — of the note it was
         // scheduled for, not whichever note is showing 0.5s later
         onLiveEdit?(note)  // the screen keeps up with the typing; the disk waits for a pause

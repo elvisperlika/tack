@@ -118,6 +118,23 @@ final class NoteGrid: NSObject {
         wrap.addSubview(cell)
     }
 
+    /// Every note key the grid shows.
+    var keys: [String] { cells.map(\.key) }
+
+    /// A note changed on disk, outside Tack (nil: it was deleted there). The card shows it — or
+    /// a new card appears, or the card goes — unless the user has an edit to it in flight, which
+    /// wins when it lands (see Note.merge). An unchanged note leaves its card alone.
+    func adoptFromDisk(key: String, note: Note?) {
+        let cell = cells.first { $0.key == key }
+        if let cell, cell.hasPendingEdit { return }
+        guard let note else {
+            if cell != nil { update(key: key, note: Note(text: "", dx: 0, dy: 0)) }
+            return
+        }
+        if cell?.currentNote == note { return }
+        update(key: key, note: note)
+    }
+
     /// Lift `cell` and let it scroll its own text; whichever was lifted before settles back.
     private func focus(_ cell: NoteGridCell?) {
         guard cell !== focused else { return }
@@ -359,13 +376,25 @@ private final class NoteGridCell: NSView {
 
     // MARK: - Saving
 
+    /// The note as this card shows it now — what a save would write.
+    var currentNote: Note { card.note(keeping: stored.note) }
+    var hasPendingEdit: Bool { saver.isPending }
+
     private func scheduleSave() {
-        let edited = card.note(keeping: stored.note)  // placement comes back untouched
+        let edited = currentNote  // placement comes back untouched
         onLiveEdit(stored.key, edited)  // the floating note keeps pace; the disk waits for a pause
-        let stored = stored
+        let stored = stored  // `stored.note` is what this card last read or wrote: the merge's "seen"
         saver.call { [weak self] in
             do {
-                try stored.save(edited)
+                // Never over a newer file: see Note.merge.
+                let toWrite = Note.merge(
+                    mine: edited, seen: stored.note, disk: try StoredNote.load(key: stored.key))
+                try stored.save(toWrite)
+                self?.stored.note = toWrite
+                if toWrite != edited {  // the file's words won: show them, here and on the window
+                    self?.card.load(toWrite)
+                    self?.onLiveEdit(stored.key, toWrite)
+                }
                 return true
             } catch {
                 self?.onError(error)

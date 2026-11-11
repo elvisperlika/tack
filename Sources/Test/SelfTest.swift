@@ -41,6 +41,7 @@ enum SelfTest {
         noteSizeIsOptional()
         urlNormalization()
         dashboardBackdrop()
+        mergeKeepsNewerFile()
         updateVersions()
         updateReleaseParsing()
         treePathIsRemembered()
@@ -786,6 +787,35 @@ extension SelfTest {
 
         let repo = Data(#"{"name": "tack", "stargazers_count": 42, "forks_count": 3}"#.utf8)
         assert(try! Updater.stars(from: repo) == 42, "the star count comes from stargazers_count")
+    }
+
+    /// Issue #13: a save must not write the old words over a file a script has rewritten.
+    static func mergeKeepsNewerFile() {
+        let seen = Note(text: "old", dx: 1, dy: 1)
+        let disk = Note(text: "from the script", dx: 1, dy: 1)
+        let dragged = Note(text: "old", dx: 50, dy: 60)
+        let merged = Note.merge(mine: dragged, seen: seen, disk: disk)
+        assert(merged.text == "from the script", "a drag keeps the file's words")
+        assert(merged.dx == 50 && merged.dy == 60, "and still moves the note")
+
+        let typed = Note(text: "typed now", dx: 1, dy: 1)
+        assert(Note.merge(mine: typed, seen: seen, disk: disk) == typed, "what the user typed wins")
+
+        // Each field on its own: the user recolours while a script rewrites the text.
+        var recoloured = seen
+        recoloured.color = "AEC6FF"
+        let both = Note.merge(mine: recoloured, seen: seen, disk: disk)
+        assert(both.text == "from the script" && both.color == "AEC6FF", "both changes survive: \(both)")
+        assert(Note.merge(mine: dragged, seen: seen, disk: seen) == dragged, "nobody else wrote: as is")
+        assert(Note.merge(mine: dragged, seen: nil, disk: disk) == dragged, "nothing seen yet: as is")
+        assert(Note.merge(mine: dragged, seen: seen, disk: nil) == dragged, "file gone: as is")
+
+        let pending = Debouncer(delay: 60)
+        assert(!pending.isPending, "nothing scheduled, nothing pending")
+        pending.call { true }
+        assert(pending.isPending, "a scheduled save is pending until it runs")
+        pending.flush()
+        assert(!pending.isPending, "a run save is no longer pending")
     }
 
     static func dashboardBackdrop() {
