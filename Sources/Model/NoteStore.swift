@@ -8,6 +8,7 @@ enum NotePersistenceError: LocalizedError {
     case backup(URL, Error)
     case write(URL, Error)
     case delete(URL, Error)
+    case occupied
 
     var errorDescription: String? {
         switch self {
@@ -27,6 +28,8 @@ enum NotePersistenceError: LocalizedError {
             return "Could not save notes at \(url.path): \(error.localizedDescription)"
         case .delete(let url, let error):
             return "Could not delete notes at \(url.path): \(error.localizedDescription)"
+        case .occupied:
+            return "Another note is already pinned there. Delete it first, then pin this one."
         }
     }
 }

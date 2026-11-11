@@ -557,6 +557,16 @@ extension SelfTest {
         assert(old == nil, "the old key should be gone after promotion")
         assert(promoted == n, "the note should live at the window level now")
         assert(loaded?.level == 1, "and lookup should find it there")
+
+        let other = Note(text: "other", dx: 0, dy: 0)
+        try! c.write(other, at: 0)
+        do {
+            try c.move(n, from: 1, to: 0)
+            assert(false, "moving onto an occupied level must throw")
+        } catch {}
+        let kept = try! c.note(at: 0)
+        let unmoved = try! c.note(at: 1)
+        assert(kept == other && unmoved == n, "a refused move must leave both notes as they were")
     }
 
     static func containerMovePreservesSourceOnFailure() {

@@ -71,6 +71,9 @@ class Container {
     /// Write the destination first. If either operation fails, at least one complete copy remains.
     final func move(_ note: Note, from: Int, to: Int) throws {
         guard from != to else { return }
+        // Two notes can sit at different levels of one surface, and only the finest shows — so
+        // the one at the destination is out of sight, and a blind write would replace it unseen.
+        guard try self.note(at: to) == nil else { throw NotePersistenceError.occupied }
         try write(note, at: to)
         try write(Note(text: "", dx: note.dx, dy: note.dy, color: note.color), at: from)
     }
