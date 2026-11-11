@@ -102,10 +102,45 @@ enum FinderWatcher {
 /// screen — so they're fresh even mid-drag, when an AX query would stall on the target
 /// app's busy main thread.
 enum WindowServer {
-    /// Every window on screen, front to back.
+    /// Every window on screen, front to back, desktop elements included: `isRearranging` reads the wallpapers. Everything else here keeps to the normal layer.
     static func list() -> [[String: Any]] {
-        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        return CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] ?? []
+        if let shared { return shared }
+        let fresh = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        if sharing { shared = fresh }
+        return fresh
+    }
+
+    private static var sharing = false
+    private static var shared: [[String: Any]]?
+
+    /// Everything `body` asks — is the screen being rearranged, where is this window — is answered from one read of the window list, taken when first asked for. Two reads a moment apart disagree at the edges of a desktop switch: the first has a window where the slide left it, the second says nothing is sliding, and a note placed by that pair stays wrong. Main thread only, and `body` must not run a modal: frames tracked under it would be handed this stale list.
+    static func sharingOneRead(_ body: () -> Void) {
+        sharing = true
+        defer {
+            sharing = false
+            shared = nil
+        }
+        body()
+    }
+
+    /// The Dock is rearranging the screen: sliding from one desktop to the next, or showing Mission Control. For as long as it does, the window list is no place to read positions from. It holds the windows of every desktop taking part, each where the animation has it right now, so a note that followed them was moved by Tack and by the system at once, and the notes of the other desktops popped up on this one.
+    static func isRearranging() -> Bool {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        CGGetActiveDisplayList(UInt32(ids.count), &ids, &count)
+        return isRearranging(in: list(), displays: ids.prefix(Int(count)).map(CGDisplayBounds))
+    }
+
+    /// Two tells, both the Dock's. Mission Control puts a Dock window among the normal ones, where the Dock otherwise has none. And a slide shows in the wallpaper: the Dock keeps one behind each screen, exactly where the screen is, and mid-slide there is one per desktop, off to the side. Anything else the Dock owns down there is not screen-sized and says nothing, which also keeps an unknown setup on the old behaviour rather than freezing every note.
+    static func isRearranging(in list: [[String: Any]], displays: [CGRect]) -> Bool {
+        list.contains { info in
+            guard info[kCGWindowOwnerName as String] as? String == "Dock",
+                let layer = info[kCGWindowLayer as String] as? Int, layer <= 0,
+                let b = info[kCGWindowBounds as String] as? NSDictionary,
+                let rect = CGRect(dictionaryRepresentation: b)
+            else { return false }
+            return layer == 0 || (displays.contains { $0.size == rect.size } && !displays.contains(rect))
+        }
     }
 
     /// The on-screen window `number` of `pid`, or its frontmost one when no number is given —

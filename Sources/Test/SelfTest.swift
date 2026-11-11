@@ -26,6 +26,7 @@ enum SelfTest {
         finderReplyParsing()
         appleScriptsCompile()
         windowPicking()
+        rearrangingIsDetected()
         genericKeyMatchesLegacyFormat()
         levelLabels()
         debouncerCollapses()
@@ -754,6 +755,31 @@ extension SelfTest {
             doc?.frame.covering == [CGRect(x: 200, y: 0, width: 100, height: 100)],
             "only other apps' normal windows cover it: \(String(describing: doc?.frame.covering))")
         assert(WindowServer.pick(from: screen, pid: 1, number: 99) == nil, "a window that left the screen is no window")
+    }
+
+    /// Window lists recorded on a 1440×900 screen: at rest, in the middle of a swipe to the next desktop, and with Mission Control open.
+    static func rearrangingIsDetected() {
+        func dock(x: CGFloat, y: CGFloat = 0, w: CGFloat = 1440, h: CGFloat = 900, layer: Int = -2_147_483_624) -> [String: Any] {
+            [
+                kCGWindowOwnerName as String: "Dock", kCGWindowLayer as String: layer,
+                kCGWindowBounds as String: CGRect(x: x, y: y, width: w, height: h).dictionaryRepresentation,
+            ]
+        }
+        let app: [String: Any] = [
+            kCGWindowOwnerName as String: "Ghostty", kCGWindowLayer as String: 0,
+            kCGWindowBounds as String: CGRect(x: 510, y: 25, width: 1440, height: 875).dictionaryRepresentation,
+        ]
+        let screen = [CGRect(x: 0, y: 0, width: 1440, height: 900)]
+        let bar = dock(x: 0, y: 826, h: 74, layer: 20)  // the Dock itself
+        assert(!WindowServer.isRearranging(in: [bar, app, dock(x: 0)], displays: screen), "one wallpaper, where the screen is: at rest")
+        let swipe = [app, dock(x: -1556, y: 33, w: 117, h: 97, layer: -2_147_483_603), dock(x: 1640), dock(x: -1368), dock(x: 136)]
+        assert(WindowServer.isRearranging(in: swipe, displays: screen), "wallpapers off the screen's own rect: mid-swipe")
+        assert(WindowServer.isRearranging(in: [dock(x: 1)], displays: screen), "the first pixel of a swipe counts")
+        let two = screen + [CGRect(x: 1440, y: 0, width: 1440, height: 900)]
+        assert(!WindowServer.isRearranging(in: [dock(x: 0), dock(x: 1440)], displays: two), "a second screen's wallpaper is at rest too")
+        assert(!WindowServer.isRearranging(in: [dock(x: 300, w: 500, h: 400)], displays: screen), "a Dock window that is no wallpaper says nothing")
+        // Mission Control: the wallpaper hasn't moved, but the Dock has a window among the normal ones.
+        assert(WindowServer.isRearranging(in: [app, dock(x: 0, layer: 0), dock(x: 0)], displays: screen), "a normal-level Dock window: Mission Control")
     }
 
     static func finderReplyParsing() {

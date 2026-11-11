@@ -12,6 +12,7 @@ final class ShownNote {
     /// never writes over a newer one (see Note.merge).
     var seen: Note?
     var stillFrames = 0  // samples since it last moved — see samples(stillFrames:)
+    var missing = 0  // samples in a row its window was nowhere on a desktop in view — see trackNotes
 
     /// The storage key of the note on screen. Computed: a pin change moves the note to another
     /// level, and the key has to move with it.
@@ -31,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         didSet { oldValue?.invalidate() }  // an outlived link would keep firing
     }
     private var lastPersistenceError: String?
+    private var pollWhenSettled = false  // a poll is already waiting for the screen to settle — see pollTarget
 
     /// The focused surface, as of the last poll.
     var current: Container?
@@ -97,6 +99,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Decides what the *focused* app shows. Only that app's note is ever changed here: the
     /// notes of every other app stay up, following their own windows.
     private func pollTarget() {
+        // A surface resolved mid-switch between desktops would be placed where the slide has its window. Looked at again every tenth of a second until the screen has settled, so a note that needs this poll to come up doesn't also wait out the 0.4s timer.
+        if WindowServer.isRearranging() {
+            guard !pollWhenSettled else { return }
+            pollWhenSettled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.pollWhenSettled = false
+                self?.pollTarget()
+            }
+            return
+        }
         // The note that is the dashboard keeps its app's slot until it turns back into a note:
         // re-showing or hiding that slot meanwhile would yank the dashboard away.
         if let host = dashboardNote,
@@ -154,22 +166,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func trackNotes() {
         var showing = false
-        for entry in notes.values {
-            guard let container = entry.container else { continue }
-            showing = true
-            entry.stillFrames += 1
-            guard Self.samples(stillFrames: entry.stillFrames) else { continue }
-            // No window to follow — minimised, hidden, on another Space. The note waits out of
-            // sight and comes back with the window; only a new focus or a quit takes it down.
-            guard let f = container.frame() else {
-                entry.window.setOccluded(true)
-                continue
+        // One read of the window list for the whole frame — see WindowServer.sharingOneRead.
+        WindowServer.sharingOneRead {
+            for entry in notes.values {
+                guard let container = entry.container else { continue }
+                showing = true
+                entry.stillFrames += 1
+                guard Self.samples(stillFrames: entry.stillFrames) else { continue }
+                // Mid-switch between desktops, or in Mission Control, every window is reported where the animation has it. The note is left alone then, riding its own desktop, which is all it has to do — see WindowServer.isRearranging.
+                if WindowServer.isRearranging() { continue }
+                // No window to follow — minimised, hidden, on another Space. The note waits out of
+                // sight and comes back with the window; only a new focus or a quit takes it down.
+                guard let f = container.frame() else {
+                    // On another desktop there is nothing to do: the note is out of sight there already, and left up it rides back in with its window instead of popping in once the switch is over. Only on a desktop in view is it taken down, and only at the second sample in a row: AppKit learns of a desktop switch a moment after the window list shows it.
+                    entry.missing = entry.window.isOnActiveSpace ? entry.missing + 1 : 0
+                    if entry.missing >= 2 { entry.window.setOccluded(true) }
+                    continue
+                }
+                entry.missing = 0
+                if f.bounds != entry.lastBounds {
+                    entry.lastBounds = f.bounds
+                    entry.stillFrames = 0
+                }
+                apply(f, to: entry.window)
             }
-            if f.bounds != entry.lastBounds {
-                entry.lastBounds = f.bounds
-                entry.stillFrames = 0
-            }
-            apply(f, to: entry.window)
         }
         if !showing { trackLink = nil }  // nothing left to follow; showNote starts it again
     }
@@ -185,6 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// — which is what keeps the note of an app in the background from floating over the app
     /// in front of it.
     private func apply(_ f: Frame, to note: NoteWindow) {
+        note.joinActiveSpace()
         note.updateWindow(bounds: f.bounds)
         let spot = note.screenRectTopLeft()
         note.setOccluded(f.covering.contains { $0.intersects(spot) })

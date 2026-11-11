@@ -172,6 +172,15 @@ final class NoteWindow: NSObject, NSWindowDelegate {
         applyVisibility()
     }
 
+    /// The note is on a desktop in view. A note that isn't up at all counts as one, which suits the one caller: there is nothing to take down.
+    var isOnActiveSpace: Bool { window.isOnActiveSpace }
+
+    /// The tracked window is in view: a note left up on another desktop, because its window was moved off that one, is brought over. Ordering it front is what moves it (`.moveToActiveSpace`).
+    func joinActiveSpace() {
+        guard shown, !lifting, !window.isOnActiveSpace else { return }
+        window.orderFront(nil)
+    }
+
     /// The note's on-screen rect in top-left screen coords, for occlusion tests.
     func screenRectTopLeft() -> CGRect { anchor.screenRectTopLeft() }
 
