@@ -123,7 +123,7 @@ final class NotePill: NSObject {
     }
 
     private static func dotButton(index: Int, name: String) -> NSButton {
-        let b = NSButton(frame: dotFrame(index: index))
+        let b = HoverButton(frame: dotFrame(index: index))
         b.isBordered = false
         b.imagePosition = .imageOnly
         b.setAccessibilityLabel(name)
@@ -399,18 +399,8 @@ final class NotePill: NSObject {
             b.image = Swatch.image(
                 hex: hex, size: Self.dotSize, radius: Self.dotSize / 2,
                 borderWidth: hex == styler.colorHex ? 2 : 1)
-            b.wantsLayer = true
-            b.onHover = { [weak self, weak b] inside in
-                guard let self, let layer = b?.layer else { return }
-                let target = inside ? CATransform3DMakeScale(1.1, 1.1, 1) : CATransform3DIdentity
-                let animation = CABasicAnimation(keyPath: "transform")
-                animation.fromValue = layer.presentation()?.transform ?? layer.transform
-                animation.toValue = target
-                animation.duration = 0.14
-                animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                layer.add(animation, forKey: "hoverScale")
-                layer.transform = target
-                guard inside else { return }  // leaving a dot keeps its preview
+            b.onHover = { [weak self] inside in
+                guard let self, inside else { return }  // leaving a dot keeps its preview
                 previewing = true
                 onColor(Swatch.color(fromHex: hex), false)
             }
