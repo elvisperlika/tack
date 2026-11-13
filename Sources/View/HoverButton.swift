@@ -4,6 +4,8 @@ import AppKit
 /// swells under the cursor — every dot in the pill does, so each one reads as pressable.
 class HoverButton: NSButton {
     var onHover: ((Bool) -> Void)?
+    /// How much it swells: plenty for an 18pt dot, too much for anything wider.
+    var hoverScale: CGFloat = 1.2
 
     // Layer-backed from the start: a layer made on the first hover misses that hover's animation.
     override func viewDidMoveToSuperview() {
@@ -22,7 +24,7 @@ class HoverButton: NSButton {
         var target = CATransform3DIdentity
         if inside {
             target = CATransform3DTranslate(target, c.x, c.y, 0)
-            target = CATransform3DScale(target, 1.2, 1.2, 1)
+            target = CATransform3DScale(target, hoverScale, hoverScale, 1)
             target = CATransform3DTranslate(target, -c.x, -c.y, 0)
         }
         let animation = CABasicAnimation(keyPath: "transform")

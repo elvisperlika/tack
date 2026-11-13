@@ -503,6 +503,7 @@ final class NotePill: NSObject {
         _ title: String, fill: NSColor, ink: NSColor, target: AnyObject, action: Selector
     ) -> NSButton {
         let b = HoverButton()
+        b.hoverScale = 1.05  // a word is several dots wide: the dots' swell would balloon it
         b.isBordered = false
         b.attributedTitle = NSAttributedString(
             string: title,
