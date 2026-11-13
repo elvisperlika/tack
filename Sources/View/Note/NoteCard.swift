@@ -87,7 +87,9 @@ final class NoteCard: NSObject {
         editor.onEdit = { [weak self] in self?.onEdit() }
         pill.onFont = { [weak self] face, commit in self?.choose(family: face, commit: commit) }
         pill.onColor = { [weak self] color, commit in self?.choose(color: color, commit: commit) }
-        pill.onDelete = { [weak self] in self?.deleteTapped() }
+        pill.onDelete = { [weak self] in self?.onDelete() }
+        // An empty note has nothing to lose, so it goes on the first click.
+        pill.deleteNeedsConfirm = { [weak self] in self?.editor.isBlank == false }
     }
 
     /// A click landed on the card, text or glass — the dashboard takes it as "this one".
@@ -188,22 +190,4 @@ final class NoteCard: NSObject {
         onEdit()
     }
 
-    // MARK: - Deleting
-
-    /// A single click on the red dot is the whole delete gesture, so a note with text asks first.
-    private func deleteTapped() {
-        guard confirmDelete() else { return }
-        onDelete()
-    }
-
-    private func confirmDelete() -> Bool {
-        guard !editor.isBlank else { return true }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Delete this note?"
-        alert.informativeText = "Its text will be lost."
-        alert.addButton(withTitle: "Delete")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
-    }
 }
