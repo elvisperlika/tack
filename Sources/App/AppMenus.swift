@@ -32,7 +32,8 @@ extension AppDelegate {
         return i
     }
 
-    /// Shows the current container's note, or creates a centred empty note when none is saved.
+    /// Shows the current container's note, or creates a centred note titled "New note" when none
+    /// is saved — the title selected, so typing replaces it.
     @objc func addNote() {
         guard let container = resolve(), let f = container.frame() else { return }
         let hit: (note: Note, level: Int)?
@@ -44,11 +45,11 @@ extension AppDelegate {
         }
         let start = Coord.center(note: NotePreferences.shared.defaultSize, window: f.bounds.size)
         showNote(
-            hit?.note ?? Note(text: "", dx: start.dx, dy: start.dy), frame: f, container: container,
+            hit?.note ?? Note(text: "# New note", dx: start.dx, dy: start.dy), frame: f, container: container,
             level: hit?.level ?? container.finestLevel)  // finest available, promote later
         current = container
         NSApp.activate(ignoringOtherApps: true)
-        notes[container.app]?.window.focusForEditing()
+        notes[container.app]?.window.focusForEditing(selectingText: hit == nil)
     }
 
     /// Opens the Tack window on every note. The floating notes are flushed first: each can be up

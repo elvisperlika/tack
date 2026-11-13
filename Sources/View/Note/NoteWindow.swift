@@ -200,9 +200,9 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     /// The process may terminate before the debounce delay expires.
     @discardableResult func flushPendingSave() -> Bool { saver.flush() }
 
-    func focusForEditing() {
+    func focusForEditing(selectingText: Bool = false) {
         window.makeKeyAndOrderFront(nil)
-        card.focus(in: window)
+        card.focus(in: window, selectingText: selectingText)
     }
 
     // MARK: - Pop animation

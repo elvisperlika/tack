@@ -127,7 +127,11 @@ final class NoteCard: NSObject {
         Note(text: "", dx: base.dx, dy: base.dy, color: styler.colorHex)
     }
 
-    func focus(in window: NSWindow?) { window?.makeFirstResponder(editor.textView) }
+    /// `selectingText`: a new note's placeholder title is selected, so the first keystroke replaces it.
+    func focus(in window: NSWindow?, selectingText: Bool = false) {
+        window?.makeFirstResponder(editor.textView)
+        if selectingText { editor.textView.selectAll(nil) }
+    }
 
     /// The card turning into a plain pane of `color`: the text and the pill fade out while the
     /// tint washes over. `restorePane` puts the note back exactly as it was.
