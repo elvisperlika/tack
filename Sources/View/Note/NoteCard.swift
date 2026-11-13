@@ -21,7 +21,9 @@ final class NoteCard: NSObject {
     var onDelete: () -> Void = {}
 
     private static let strip: CGFloat = 18  // top drag handle; the pill parks in its right corner
-    private static let radius: CGFloat = 12
+    /// Concentric with the pill: its own radius plus the gap it keeps from the corner, so the
+    /// card's edge runs parallel to the pill's at the same distance all the way round the bend.
+    static let radius = NotePill.pillOpenSize.height / 2 + NotePill.pillInset
 
     /// Rounds the *material*. A .behindWindow blur is shaped by the window server from this
     /// mask's alpha, not by the layer, so `cornerRadius` alone leaves a square pane of frost

@@ -315,7 +315,8 @@ private final class NoteGridCell: NSView {
         var lift = CATransform3DMakeTranslation(card.midX, card.midY, 0)
         lift = CATransform3DScale(lift, Self.liftScale, Self.liftScale, 1)
         lift = CATransform3DTranslate(lift, -card.midX, -card.midY, 0)
-        let outline = CGPath(roundedRect: card, cornerWidth: 12, cornerHeight: 12, transform: nil)
+        let outline = CGPath(
+            roundedRect: card, cornerWidth: NoteCard.radius, cornerHeight: NoteCard.radius, transform: nil)
         liftShadow.frame = bounds
         liftShadow.shadowPath = outline
         // Everything around the card, and nothing inside it (even-odd: the card is a hole).
