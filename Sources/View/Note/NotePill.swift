@@ -359,6 +359,16 @@ final class NotePill: NSObject {
 
         let shown = shownDots()
         let gone = spent + [fontDot, colorDot, pinDot, allDot, revealDot, settingsDot, backDot, deleteDot].filter { !shown.contains($0) }
+        // Dots that weren't on screen yet: the ones that fade in as the capsule opens.
+        let arriving = shown.filter { $0.isHidden || choiceDots.contains($0) }
+        // They start already where they'll end up on screen — offset by however far the left
+        // edge is about to travel — so they hold still while the capsule grows. Left at their old
+        // spot they slid under the cursor one after another, and each kept its hover zoom.
+        let (xs, width) = Self.row(shown)
+        let growth = width - view.frame.width
+        for (dot, x) in zip(shown, xs) where arriving.contains(dot) {
+            dot.setFrameOrigin(NSPoint(x: x - growth, y: Self.pillPad.height))
+        }
         shown.forEach { $0.isHidden = false }
         // Hide the outgoing dots now, not on completion: a delete dot lingering under the swatches
         // for the length of the animation is a note deleted by accident. Closing is the exception —
@@ -367,14 +377,48 @@ final class NotePill: NSObject {
 
         NSAnimationContext.runAnimationGroup(
             { ctx in
-                ctx.duration = animated ? 0.14 : 0
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                ctx.duration = animated ? Self.openDuration : 0
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 layout()
             },
             completionHandler: {
                 if mode == .closed { gone.forEach { $0.isHidden = true } }
                 spent.forEach { $0.removeFromSuperview() }
             })
+        if animated && mode != .closed { popIn(arriving) }
+    }
+
+    private static let openDuration: CFTimeInterval = 0.3
+
+    /// Once the capsule has finished growing, the arriving dots pop out of it all together:
+    /// each fades in while springing up from a smaller size about its own centre.
+    private func popIn(_ dots: [NSButton]) {
+        let start = CACurrentMediaTime() + Self.openDuration
+        for dot in dots {
+            guard let layer = dot.layer else { continue }  // HoverButtons are layer-backed once mounted
+            let c = CGPoint(x: dot.bounds.midX, y: dot.bounds.midY)
+            // Scaled about the centre: a view layer's anchor sits at its bottom-left corner.
+            var small = CATransform3DMakeTranslation(c.x, c.y, 0)
+            small = CATransform3DScale(small, 0.4, 0.4, 1)
+            small = CATransform3DTranslate(small, -c.x, -c.y, 0)
+
+            let grow = CASpringAnimation(keyPath: "transform")
+            grow.fromValue = small
+            grow.toValue = CATransform3DIdentity
+            grow.damping = 16
+            grow.stiffness = 220
+            grow.duration = grow.settlingDuration
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0
+            fade.toValue = 1
+            fade.duration = 0.18
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            for (key, anim) in [("arriveGrow", grow as CABasicAnimation), ("arriveFade", fade)] {
+                anim.beginTime = start
+                anim.fillMode = .backwards  // hidden and small until the capsule is open
+                layer.add(anim, forKey: key)
+            }
+        }
     }
 
     // MARK: - Pickers
