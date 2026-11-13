@@ -1,31 +1,5 @@
 import AppKit
 
-/// The dashboard's background: a soft diagonal gradient through the colours of its notes.
-/// Layer-hosting (the layer is set before `wantsLayer`), so colour changes animate on their own.
-private final class GradientView: NSView {
-    private let gradient = CAGradientLayer()
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        gradient.startPoint = CGPoint(x: 0, y: 1)  // top-left to bottom-right
-        gradient.endPoint = CGPoint(x: 1, y: 0)
-        layer = gradient
-        wantsLayer = true
-        autoresizingMask = [.width, .height]
-    }
-
-    required init?(coder: NSCoder) { fatalError("not from a nib") }
-
-    /// Washed over the pane rather than painted solid, so it reads as a tint of the notes, and
-    /// the notes' own glass stays the strongest colour on screen.
-    func show(_ hexes: [String]) {
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(0.3)
-        gradient.colors = hexes.map { Swatch.color(fromHex: $0).withAlphaComponent(0.45).cgColor }
-        CATransaction.commit()
-    }
-}
-
 /// Borderless windows can't become key by default, so text editing wouldn't work.
 private final class KeyableWindow: NSWindow {
     override var canBecomeKey: Bool { true }
@@ -271,12 +245,6 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     private static let contentFade = 0.18
     private static let dashboardLevel = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
 
-    /// The dashboard's background, built on first expand and kept for the next one.
-    private lazy var backdrop = GradientView(frame: .zero)
-
-    /// Repaint the dashboard's background from its notes' colours (see `NoteGrid.colors`).
-    func setDashboardColors(_ hexes: [String]) { backdrop.show(hexes) }
-
     /// While this note is the dashboard: what it shows, and what to put back afterwards.
     private var dashboard: (content: NSView, home: NSRect, limits: (NSSize, NSSize))?
     var isExpanded: Bool { dashboard != nil }
@@ -349,13 +317,8 @@ final class NoteWindow: NSObject, NSWindowDelegate {
         card.pill.showingSettings = false  // a dashboard always opens on its notes
         content.alphaValue = 0
         card.view.addSubview(content, positioned: .below, relativeTo: card.pill.view)
-        // The whole card, strip included, under whatever page is up.
-        backdrop.frame = bounds
-        backdrop.alphaValue = 0
-        card.view.addSubview(backdrop, positioned: .below, relativeTo: content)
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = Self.contentFade
-            backdrop.animator().alphaValue = 1
             content.animator().alphaValue = 1
             card.pill.view.animator().alphaValue = 1
         }
@@ -393,13 +356,11 @@ final class NoteWindow: NSObject, NSWindowDelegate {
             { ctx in
                 ctx.duration = Self.contentFade
                 dashboard.content.animator().alphaValue = 0
-                backdrop.animator().alphaValue = 0
                 card.pill.view.animator().alphaValue = 0
             },
             completionHandler: { [weak self] in
                 guard let self else { return }
                 dashboard.content.removeFromSuperview()
-                backdrop.removeFromSuperview()
                 card.editor.view.isHidden = false  // still faded out: the shrink brings it back
                 card.pill.isDashboard = false
                 shrink(dashboard)

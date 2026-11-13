@@ -24,22 +24,6 @@ final class NoteGrid: NSObject {
     var onLiveEdit: ((String, Note) -> Void)?
     /// A cell brought the app its note lives on to the front.
     var onReveal: (() -> Void)?
-    /// The notes in the grid — or their colours — may have changed: the dashboard repaints its
-    /// background from `colors`.
-    var onChange: (() -> Void)?
-
-    /// The colours of the notes shown, as the dashboard's background uses them.
-    var colors: [String] { Self.backdrop(cells.map(\.colorHex)) }
-
-    /// Each colour once, in the order the notes are laid out, at most four — past that a
-    /// gradient is mud. One colour still makes two stops, so a gradient always has a run.
-    static func backdrop(_ hexes: [String]) -> [String] {
-        var seen = Set<String>()
-        let distinct = hexes.map { $0.uppercased() }.filter { seen.insert($0).inserted }
-        let stops = Array(distinct.prefix(4))
-        return stops.count == 1 ? stops + stops : stops
-    }
-
     init(onError: @escaping (Error) -> Void) {
         self.onError = onError
         view = FocusScrollView(frame: NSRect(x: 0, y: 0, width: 760, height: 520))
@@ -75,7 +59,6 @@ final class NoteGrid: NSObject {
             onError(error)
             return
         }
-        defer { onChange?() }
         guard !stored.isEmpty else {
             setPlaceholder(true)
             wrap.needsLayout = true
@@ -92,7 +75,6 @@ final class NoteGrid: NSObject {
     /// built at until the next reload. Reframing mid-type would reflow the whole grid under the
     /// cursor, which is worse than a stale size.
     func update(key: String, note: Note) {
-        defer { onChange?() }
         if let cell = cells.first(where: { $0.key == key }) {
             guard !note.isDeletion else { return drop(cell) }
             cell.apply(note)
@@ -109,7 +91,6 @@ final class NoteGrid: NSObject {
         cell.onDelete = { [weak self] cell in self?.drop(cell) }
         cell.onLiveEdit = { [weak self] key, note in
             self?.onLiveEdit?(key, note)
-            self?.onChange?()  // a colour picked on a card shows in the background at once
         }
         cell.onReveal = { [weak self] in self?.onReveal?() }
         cell.onPress = { [weak self, weak cell] in self?.focus(cell) }
@@ -155,7 +136,6 @@ final class NoteGrid: NSObject {
         cell.removeFromSuperview()
         setPlaceholder(cells.isEmpty)
         wrap.needsLayout = true
-        onChange?()
     }
 
     /// Kept as a field rather than found by type: cells hold labels of their own, and picking the

@@ -375,10 +375,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The dashboard floats over everything: left up, it would hide the app it just brought
         // forward. It turns back into its note, and the poll shows that app's note as usual.
         grid.onReveal = { [weak self] in self?.closeDashboard() }
-        grid.onChange = { [weak self] in
-            guard let self, let host = dashboardNote else { return }
-            host.setDashboardColors(self.grid.colors)
-        }
         return grid
     }()
 
@@ -412,7 +408,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onSettingsPage = false
         host.expand(showing: grid.view, to: dashboardFrame(near: host.frame, fromNote: host !== looseNote), color: Self.dashboardColor)
         dashboardNote = host
-        host.setDashboardColors(grid.colors)
     }
 
     func closeDashboard() {
@@ -447,15 +442,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return NSRect(x: area.minX + dx, y: area.minY + dy, width: size.width, height: size.height)
     }
 
-    /// The dashboard's background, solid — what a growing note washes to. Read in the light
-    /// appearance the cards are always drawn in, so the two never clash.
-    private static var dashboardColor: NSColor {
-        var color = NSColor.windowBackgroundColor
-        NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
-            color = color.usingColorSpace(.sRGB) ?? color
-        }
-        return color
-    }
+    /// The dashboard's background, solid — what a growing note washes to: a neutral grey just
+    /// off white, so the notes' own colours are the only colour on screen.
+    private static let dashboardColor = Swatch.color(fromHex: "F5F5F5")
 
     func reportPersistenceError(_ error: Error) {
         let message = error.localizedDescription

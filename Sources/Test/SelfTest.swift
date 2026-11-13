@@ -42,7 +42,6 @@ enum SelfTest {
         backspaceAtTheEnd()
         noteSizeIsOptional()
         urlNormalization()
-        dashboardBackdrop()
         mergeKeepsNewerFile()
         emptyNoteSurvivesItsOwnSave()
         updateVersions()
@@ -862,15 +861,6 @@ extension SelfTest {
         assert(pending.isPending, "a scheduled save is pending until it runs")
         pending.flush()
         assert(!pending.isPending, "a run save is no longer pending")
-    }
-
-    static func dashboardBackdrop() {
-        assert(NoteGrid.backdrop([]) == [], "no notes, no gradient")
-        assert(NoteGrid.backdrop(["ffeb73"]) == ["FFEB73", "FFEB73"], "one colour still makes a run")
-        assert(
-            NoteGrid.backdrop(["FFEB73", "AEC6FF", "ffeb73", "FFB3BA"]) == ["FFEB73", "AEC6FF", "FFB3BA"],
-            "each colour once, in the order the notes come")
-        assert(NoteGrid.backdrop(["1", "2", "3", "4", "5"]).count == 4, "at most four stops")
     }
 
     static func markdownRoundTrip() {
