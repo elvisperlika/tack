@@ -21,7 +21,9 @@ final class NoteCard: NSObject {
     var onDelete: () -> Void = {}
 
     private static let strip: CGFloat = 18  // top drag handle; the pill parks in its right corner
-    private static let radius: CGFloat = 12
+    /// Concentric with the pill: its own radius plus the gap it keeps from the corner, so the
+    /// card's edge runs parallel to the pill's at the same distance all the way round the bend.
+    static let radius = NotePill.pillOpenSize.height / 2 + NotePill.pillInset
 
     /// Rounds the *material*. A .behindWindow blur is shaped by the window server from this
     /// mask's alpha, not by the layer, so `cornerRadius` alone leaves a square pane of frost
@@ -87,7 +89,9 @@ final class NoteCard: NSObject {
         editor.onEdit = { [weak self] in self?.onEdit() }
         pill.onFont = { [weak self] face, commit in self?.choose(family: face, commit: commit) }
         pill.onColor = { [weak self] color, commit in self?.choose(color: color, commit: commit) }
-        pill.onDelete = { [weak self] in self?.deleteTapped() }
+        pill.onDelete = { [weak self] in self?.onDelete() }
+        // An empty note has nothing to lose, so it goes on the first click.
+        pill.deleteNeedsConfirm = { [weak self] in self?.editor.isBlank == false }
     }
 
     /// A click landed on the card, text or glass — the dashboard takes it as "this one".
@@ -125,7 +129,11 @@ final class NoteCard: NSObject {
         Note(text: "", dx: base.dx, dy: base.dy, color: styler.colorHex)
     }
 
-    func focus(in window: NSWindow?) { window?.makeFirstResponder(editor.textView) }
+    /// `selectingText`: a new note's placeholder title is selected, so the first keystroke replaces it.
+    func focus(in window: NSWindow?, selectingText: Bool = false) {
+        window?.makeFirstResponder(editor.textView)
+        if selectingText { editor.textView.selectAll(nil) }
+    }
 
     /// The card turning into a plain pane of `color`: the text and the pill fade out while the
     /// tint washes over. `restorePane` puts the note back exactly as it was.
@@ -188,22 +196,4 @@ final class NoteCard: NSObject {
         onEdit()
     }
 
-    // MARK: - Deleting
-
-    /// A single click on the red dot is the whole delete gesture, so a note with text asks first.
-    private func deleteTapped() {
-        guard confirmDelete() else { return }
-        onDelete()
-    }
-
-    private func confirmDelete() -> Bool {
-        guard !editor.isBlank else { return true }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Delete this note?"
-        alert.informativeText = "Its text will be lost."
-        alert.addButton(withTitle: "Delete")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
-    }
 }

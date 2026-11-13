@@ -104,7 +104,28 @@ final class NoteEditor: NSObject, NSTextViewDelegate {
             MarkdownInput.listRule(textView)
             reforming = false
         }
+        revealCaret()
         onEdit()
+    }
+
+    /// Keep the line being typed in view, clear of the fade at the bottom edge: the text view's
+    /// own scroll only brings the caret to the very edge, where the fade swallows it.
+    private func revealCaret() {
+        guard let lm = textView.layoutManager, let tc = textView.textContainer else { return }
+        lm.ensureLayout(for: tc)
+        let at = textView.selectedRange().location
+        let length = (textView.string as NSString).length
+        var line: NSRect
+        if at >= length, !lm.extraLineFragmentRect.isEmpty {
+            line = lm.extraLineFragmentRect  // the empty line after a trailing newline
+        } else if length > 0 {
+            line = lm.lineFragmentRect(
+                forGlyphAt: lm.glyphIndexForCharacter(at: min(at, length - 1)), effectiveRange: nil)
+        } else {
+            return
+        }
+        line.origin.y += textView.textContainerOrigin.y
+        textView.scrollToVisible(line.insetBy(dx: 0, dy: -(view.bottomFade + 4)))
     }
 
     /// Blocks keep their style wherever you type in them: on every caret move the block under it

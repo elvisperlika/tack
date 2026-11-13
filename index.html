@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tack, sticky notes that stick to windows</title>
+<meta name="description" content="Tack is a free Mac app that pins a note to a folder, a document or a browser tab. The note follows its window and is there every time you come back.">
+<meta property="og:title" content="Tack, sticky notes that stick to windows">
+<meta property="og:description" content="Pin a note to a folder, a document or a browser tab. It follows the window and is there every time you come back.">
+<meta property="og:image" content="https://elvisperlika.github.io/tack/public/banner.png">
+<link rel="icon" href="public/icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&display=swap" rel="stylesheet">
+<style>
+/* One rule for the whole page: everything is drawn in graphite line, only notes have colour. */
+:root {
+  --ground: #fff;
+  --wash: #f3f3f5;
+  --ink: #2e2e30;
+  --soft: #66666c;
+  --line: rgba(46, 46, 48, .18);
+  --yellow: #ffeb73;
+  --pink: #ffb3ba;
+  --blue: #aec6ff;
+  --white: #fff;
+  --note-ink: #252527;
+  --display: "Bricolage Grotesque", system-ui, sans-serif;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", sans-serif;
+  --serif: ui-serif, "New York", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #1c1c1e;
+    --wash: #262629;
+    --ink: #ececee;
+    --soft: #a3a3ab;
+    --line: rgba(236, 236, 238, .2);
+  }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 17px/1.55 var(--sans);
+}
+img, svg { display: block; }
+a { color: inherit; text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; border-radius: 4px; }
+.note :focus-visible { outline-color: var(--note-ink); }
+
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+h1, h2, h3 { font-family: var(--display); margin: 0; text-wrap: balance; }
+h1 { font-size: clamp(2.6rem, 6.2vw, 4.5rem); font-weight: 750; line-height: 1.02; letter-spacing: -.025em; }
+h2 { font-size: clamp(1.9rem, 3.8vw, 2.9rem); font-weight: 700; line-height: 1.08; letter-spacing: -.02em; max-width: 20ch; }
+h3 { font-size: 1.45rem; font-weight: 650; line-height: 1.2; letter-spacing: -.01em; }
+p { margin: 0; }
+.lead { font-size: 1.2rem; line-height: 1.5; color: var(--soft); max-width: 52ch; }
+.band { padding: clamp(72px, 10vw, 136px) 0; }
+.band > .wrap > h2 + .lead { margin-top: 20px; }
+
+.button {
+  display: inline-block;
+  background: var(--ink);
+  color: var(--ground);
+  font-weight: 600;
+  text-decoration: none;
+  padding: 13px 24px;
+  border-radius: 999px;
+}
+.button:hover { opacity: .86; }
+
+/* ---------- top bar ---------- */
+.top { display: flex; align-items: center; gap: 24px; padding-top: 22px; padding-bottom: 22px; }
+.brand { display: flex; align-items: center; gap: 10px; font: 700 1.35rem var(--display); text-decoration: none; margin-right: auto; }
+.top nav { display: flex; align-items: center; gap: 24px; }
+.brand img { width: 32px; height: 32px; border-radius: 8px; box-shadow: 0 0 0 1px var(--line); }
+.top .button { padding: 8px 18px; font-size: .95rem; }
+.stars { display: inline-block; margin-left: 6px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ---------- the drawn world: desktops, windows, notes ---------- */
+.stage { position: relative; background: var(--wash); border-radius: 22px; overflow: hidden; }
+.win {
+  background: var(--ground);
+  border: 1.5px solid var(--ink);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  border-bottom: 1.5px solid var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.bar i { width: 9px; height: 9px; border: 1.5px solid var(--ink); border-radius: 50%; flex: none; }
+.bar span { margin-left: 8px; }
+.body { position: relative; flex: 1; padding: 16px; }
+
+.note {
+  position: relative;
+  background: var(--note, var(--yellow));
+  color: var(--note-ink);
+  font: 14px/1.45 var(--face, var(--sans));
+  padding: 14px 16px;
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .1), 0 12px 24px -10px rgba(0, 0, 0, .35);
+}
+/* the dot in the corner, the same one as in the app icon */
+.note.dotted { padding-right: 30px; }
+.note.dotted::after {
+  content: "";
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .3);
+}
+
+.icons { display: grid; grid-template-columns: repeat(3, 64px); gap: 14px 10px; font-size: 11px; text-align: center; color: var(--soft); }
+.icons svg { width: 34px; height: 34px; margin: 0 auto 2px; color: var(--ink); }
+.glyph { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+/* skeleton text: bars, like the two in the icon */
+.bars { display: grid; gap: 9px; }
+.bars b { height: 9px; border-radius: 5px; background: var(--line); }
+
+/* ---------- hero ---------- */
+.hero { padding: clamp(28px, 5vw, 64px) 0 clamp(56px, 8vw, 104px); }
+.hero .wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 56px; align-items: center; }
+.hero .lead { margin: 24px 0 32px; }
+.hero small { display: block; margin-top: 14px; color: var(--soft); font-size: .92rem; }
+.hero .stage { height: 440px; }
+.hero figure { margin: 0; }
+.hero figcaption, .demo figcaption { margin-top: 12px; font-size: .92rem; color: var(--soft); }
+
+#desk-window { position: absolute; left: 7%; top: 64px; width: min(400px, 84%); height: 270px; }
+#desk-window .bar { cursor: grab; touch-action: none; user-select: none; }
+#desk-note { position: absolute; right: 14px; top: 30px; width: 160px; cursor: grab; touch-action: none; user-select: none; }
+#desk-window .icons { grid-template-columns: repeat(2, 64px); }
+#desk-window .bar:active, #desk-note:active { cursor: grabbing; }
+@media (prefers-reduced-motion: no-preference) {
+  /* one hint on load that the window moves and the note rides along */
+  #desk-window { animation: nudge 1.5s .7s ease-in-out 1; }
+  @keyframes nudge { 40% { transform: translate(34px, 18px); } }
+}
+
+/* ---------- problem ---------- */
+.problem .wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; align-items: center; }
+.problem p + p { margin-top: 16px; }
+.problem h2 { margin-bottom: 24px; }
+.problem .text p { max-width: 50ch; }
+.clutter { height: 400px; }
+.clutter .win { position: absolute; left: 22%; top: 96px; width: 56%; height: 210px; z-index: 2; }
+.clutter .note { position: absolute; width: 132px; font-size: 13px; }
+
+/* ---------- alternatives ---------- */
+.others { background: var(--wash); }
+.others ul { list-style: none; margin: 48px 0 0; padding: 0; }
+.others li {
+  display: grid;
+  grid-template-columns: 132px 210px minmax(0, 1fr);
+  gap: 12px 32px;
+  align-items: center;
+  padding: 22px 20px;
+  border-top: 1.5px solid var(--line);
+}
+.others li svg { width: 132px; height: 88px; }
+.others li h3 { font-size: 1.2rem; }
+.others li p { color: var(--soft); max-width: 56ch; }
+.others .us {
+  --ink: var(--note-ink);
+  background: var(--yellow);
+  color: var(--note-ink);
+  border: 0;
+  border-radius: 16px;
+  margin-top: 6px;
+}
+.others .us p { color: inherit; }
+.draw { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+.draw .n { stroke-width: 1; fill: var(--yellow); }
+.draw .p { fill: var(--pink); }
+.draw .b { fill: var(--blue); }
+.draw .w { fill: #fff; }
+.draw .faint { stroke: var(--line); }
+
+/* ---------- Tack ---------- */
+.feature {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  gap: 56px;
+  align-items: start;
+  padding-top: clamp(56px, 7vw, 96px);
+}
+.feature dl { margin: 22px 0 0; }
+.feature dt { font-weight: 650; padding-top: 16px; margin-top: 16px; border-top: 1.5px solid var(--line); }
+.feature dd { margin: 4px 0 0; color: var(--soft); max-width: 48ch; }
+.feature kbd { font: inherit; font-weight: 600; color: var(--ink); }
+.demo { margin: 0; }
+.demo .stage { padding: 28px; }
+
+.tabs .bar { gap: 4px; }
+.tabs .bar i + button { margin-left: 10px; }
+.tabs button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 1.5px solid transparent;
+  border-radius: 7px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.tabs button[aria-selected="true"] { background: var(--ink); color: var(--ground); }
+.tabs .body { min-height: 230px; }
+.tabs .pane h4 { margin: 0 0 14px; font: 650 1.05rem var(--display); }
+.tabs .bars { width: 46%; }
+.tabs .note { position: absolute; right: 16px; top: 16px; width: 44%; }
+.tabs .empty { margin-top: 18px; font-size: .9rem; color: var(--soft); max-width: 30ch; }
+
+.editor .body { min-height: 300px; }
+.editor .bars { width: 38%; }
+.editor .note { position: absolute; right: 16px; top: 16px; width: min(270px, 62%); }
+.editor .note h4 { margin: 0 0 4px; font-size: 1.15rem; line-height: 1.25; }
+.editor .note ul { margin: 6px 0; padding-left: 18px; }
+.editor .note code { font: .9em var(--mono); background: rgba(0, 0, 0, .08); padding: 1px 4px; border-radius: 4px; white-space: nowrap; }
+.editor .note label { display: flex; gap: 7px; align-items: center; cursor: pointer; }
+.editor .note input { accent-color: var(--note-ink); margin: 0; width: 15px; height: 15px; }
+.pill {
+  display: flex;
+  gap: 4px;
+  width: fit-content;
+  margin: -4px -6px 8px auto;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .6);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .1);
+}
+.pill button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--c, transparent);
+  color: var(--note-ink);
+  font: 600 14px/24px var(--f, var(--sans));
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .18);
+}
+.pill button[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--note-ink); }
+.pill hr { width: 1px; margin: 4px 2px; border: 0; background: rgba(0, 0, 0, .2); }
+
+.board .body { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 20px 16px; }
+.board h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--soft); }
+.board h4 svg { width: 16px; height: 16px; flex: none; }
+.board .note { font-size: 13px; }
+.board .note + .note { margin-top: 10px; }
+
+/* ---------- start ---------- */
+.start { background: var(--wash); }
+.start ol { list-style: none; margin: 48px 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; counter-reset: step; }
+.start li { counter-increment: step; border-top: 1.5px solid var(--ink); padding-top: 14px; }
+.start li::before { content: counter(step); display: block; font: 750 2.6rem/1 var(--display); margin-bottom: 14px; }
+.start li h3 { font-size: 1.2rem; margin-bottom: 6px; }
+.start li p { color: var(--soft); }
+.start .go { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 24px; }
+.start .go span { color: var(--soft); font-size: .95rem; }
+
+footer { padding: 32px 0 48px; color: var(--soft); font-size: .92rem; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; }
+
+@media (max-width: 860px) {
+  .hero .wrap, .problem .wrap, .feature { grid-template-columns: minmax(0, 1fr); gap: 36px; }
+  .hero .stage { height: 380px; }
+  .others li { grid-template-columns: 96px minmax(0, 1fr); padding: 20px 12px; gap: 4px 20px; }
+  .others li svg { width: 96px; height: 64px; }
+  .others li p { grid-column: 1 / -1; }
+  .start ol { grid-template-columns: minmax(0, 1fr); }
+  .demo .stage { padding: 16px; }
+}
+@media (max-width: 480px) {
+  .top nav a:not(.button) { display: none; }
+  .icons { grid-template-columns: repeat(2, 60px); }
+  .clutter .win { left: 14%; width: 72%; }
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="folder" viewBox="0 0 24 24"><path class="glyph" d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="file" viewBox="0 0 24 24"><path class="glyph" d="M7 3h7l4 4v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM14 3v4h4"/></symbol>
+  <symbol id="globe" viewBox="0 0 24 24"><path class="glyph" d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></symbol>
+</svg>
+
+<header class="wrap top">
+  <a class="brand" href="./"><img src="public/icon.png" alt="">Tack</a>
+  <nav>
+    <a href="https://github.com/elvisperlika/tack">GitHub<span class="stars" hidden></span></a>
+    <a class="button" href="https://github.com/elvisperlika/tack/releases/latest">Download</a>
+  </nav>
+</header>
+
+<main>
+
+<section class="hero">
+  <div class="wrap">
+    <div>
+      <h1>Sticky notes that stick to windows, not your desktop.</h1>
+      <p class="lead">Tack pins a note to a folder, a document or a browser tab on your Mac. The note travels with that window and is there every time you come back to it.</p>
+      <a class="button" href="https://github.com/elvisperlika/tack/releases/latest">Download Tack</a>
+      <small>Free and open source. For macOS 14 or later.</small>
+    </div>
+    <figure>
+      <div class="stage">
+        <div class="win" id="desk-window">
+          <div class="bar" tabindex="0" role="group" aria-label="Finder window. Drag it, or move it with the arrow keys."><i></i><i></i><i></i><span>Invoices 2026</span></div>
+          <div class="body">
+            <div class="icons">
+              <div><svg><use href="#folder"/></svg>March</div>
+              <div><svg><use href="#folder"/></svg>April</div>
+              <div><svg><use href="#file"/></svg>totals.pdf</div>
+              <div><svg><use href="#folder"/></svg>May</div>
+              <div><svg><use href="#file"/></svg>client.pdf</div>
+            </div>
+            <div class="note dotted" id="desk-note" tabindex="0" role="group" aria-label="Note pinned to the window. Drag it, or move it with the arrow keys.">Rename every file before sending them to Marta.</div>
+          </div>
+        </div>
+      </div>
+      <figcaption>Try it. Drag the window by its title bar and the note comes along. Then try to drag the note out of the window.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="band problem">
+  <div class="wrap">
+    <div class="text">
+      <h2>A note only helps if you see it at the right moment.</h2>
+      <p>Most reminders are about one specific thing. Rename these files before sending them. This invoice is still unpaid. Don't touch this folder until Friday.</p>
+      <p>The trouble is where the reminder ends up: on a desktop already covered in other reminders, or inside an app you have to remember to open. So the day you finally open that folder, the note about it is somewhere else.</p>
+    </div>
+    <div class="stage clutter" role="img" aria-label="A desktop covered in unrelated sticky notes. The one note about the open folder is half hidden behind the folder's window.">
+      <div class="note" style="left:4%;top:22px;--note:var(--pink);rotate:-3deg">Call the dentist</div>
+      <div class="note" style="right:5%;top:34px;--note:var(--blue);rotate:2deg">Wi-Fi password: ask Marta</div>
+      <div class="note" style="left:30%;top:14px;rotate:1deg">Ideas for June</div>
+      <div class="note" style="left:3%;bottom:26px;--note:var(--blue);rotate:2deg">Buy printer toner</div>
+      <div class="note" style="right:4%;bottom:20px;--note:var(--pink);rotate:-2deg">Renew passport</div>
+      <div class="note" style="left:36%;bottom:58px;rotate:-2deg;z-index:1">Invoices: rename before sending!</div>
+      <div class="win">
+        <div class="bar"><i></i><i></i><i></i><span>Invoices 2026</span></div>
+        <div class="body">
+          <div class="icons">
+            <div><svg><use href="#folder"/></svg>March</div>
+            <div><svg><use href="#folder"/></svg>April</div>
+            <div><svg><use href="#file"/></svg>totals.pdf</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band others">
+  <div class="wrap">
+    <h2>What you can already use, and where it falls short.</h2>
+    <p class="lead">There are plenty of ways to write a note on a Mac. Almost none let you stick it to the thing it's about.</p>
+    <ul>
+      <li>
+        <svg class="draw" viewBox="0 0 120 80" aria-hidden="true"><rect x="32" y="20" width="56" height="40" rx="5"/><rect class="n" x="5" y="8" width="22" height="18" rx="3"/><rect class="n" x="94" y="10" width="20" height="16" rx="3"/><rect class="n" x="7" y="54" width="20" height="18" rx="3"/><rect class="n" x="93" y="54" width="22" height="18" rx="3"/></svg>
+        <h3>Stickies</h3>
+        <p>Notes float on the desktop. All of them are in view all the time, whether or not they matter right now, and none of them knows which window it belongs to.</p>
+      </li>
+      <li>
+        <svg class="draw" viewBox="0 0 120 80" aria-hidden="true"><rect x="6" y="24" width="50" height="40" rx="5"/><rect x="66" y="12" width="48" height="56" rx="5"/><path d="M66 24h48"/><rect class="n" x="73" y="32" width="34" height="14" rx="3"/><path class="faint" d="M73 54h34M73 60h22"/></svg>
+        <h3>Apple Notes</h3>
+        <p>Notes live inside their own app. You have to remember that a note exists, then leave what you are doing to go and find it.</p>
+      </li>
+      <li>
+        <svg class="draw" viewBox="0 0 120 80" aria-hidden="true"><rect x="10" y="10" width="100" height="60" rx="5"/><rect x="62" y="20" width="40" height="42" rx="4"/><path class="faint" d="M68 28h28M68 34h28M68 40h20"/><rect class="n" x="68" y="48" width="28" height="8" rx="2"/></svg>
+        <h3>Finder comments</h3>
+        <p>A comment does belong to its folder, but it sits at the bottom of the Get Info panel, where nobody looks. Out of sight on the day you need it.</p>
+      </li>
+      <li>
+        <svg class="draw" viewBox="0 0 120 80" aria-hidden="true"><rect x="32" y="20" width="56" height="40" rx="5"/><rect class="n p" x="18" y="8" width="30" height="24" rx="3"/><rect class="n" x="42" y="30" width="30" height="24" rx="3"/><rect class="n b" x="66" y="6" width="30" height="24" rx="3"/><rect class="n p" x="78" y="42" width="30" height="24" rx="3"/><rect class="n b" x="10" y="46" width="28" height="22" rx="3"/></svg>
+        <h3>Other sticky-note apps</h3>
+        <p>More colours and more options, on the same desktop. The pile grows, it covers your work, and you stop reading it.</p>
+      </li>
+      <li class="us">
+        <svg class="draw" viewBox="0 0 120 80" aria-hidden="true"><rect x="14" y="10" width="92" height="60" rx="5"/><path d="M14 22h92"/><rect class="n w" x="62" y="30" width="36" height="30" rx="4"/><circle cx="92" cy="36" r="2" fill="currentColor" stroke="none"/></svg>
+        <h3>Tack</h3>
+        <p>The note is pinned to the window it's about. Open the folder and the note is there. Close it and the note is gone with it.</p>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<section class="band" id="tack">
+  <div class="wrap">
+    <h2>Tack puts the note where the work is.</h2>
+    <p class="lead">Tack is a small app that lives in your Mac's menu bar. Open a folder, a document or a web page, add a note, and from then on the two belong together.</p>
+
+    <div class="feature">
+      <div>
+        <h3>A note for every place</h3>
+        <dl>
+          <dt>Folders</dt>
+          <dd>Pin a note to any folder in Finder. Move the folder or copy it somewhere else and the note goes with it.</dd>
+          <dt>Documents</dt>
+          <dd>A note on a PDF or a text file comes back when you reopen the file, tomorrow or next month.</dd>
+          <dt>Browser tabs</dt>
+          <dd>In Safari, Chrome and Arc every page keeps its own note. Switch tab and the note switches with you.</dd>
+          <dt>Terminal tabs</dt>
+          <dd>Each Terminal tab can carry its own note too.</dd>
+          <dt>As wide as you like</dt>
+          <dd>Choose whether a note shows on one tab, on the whole window, or everywhere in that app.</dd>
+        </dl>
+      </div>
+      <figure class="demo tabs">
+        <div class="stage">
+          <div class="win">
+            <div class="bar" role="tablist" aria-label="Browser tabs">
+              <i></i><i></i><i></i>
+              <button role="tab" aria-selected="true" aria-controls="pane-flights">Flights</button>
+              <button role="tab" aria-selected="false" aria-controls="pane-recipe">Recipe</button>
+              <button role="tab" aria-selected="false" aria-controls="pane-bank">Bank</button>
+            </div>
+            <div class="body">
+              <div class="pane" id="pane-flights" role="tabpanel">
+                <h4>Lisbon, 12 to 16 May</h4>
+                <div class="bars"><b></b><b style="width:80%"></b><b></b><b style="width:60%"></b><b style="width:90%"></b></div>
+                <div class="note dotted" style="--note:var(--blue)">Wait for Sara's dates before booking. Under €180 is a good price.</div>
+              </div>
+              <div class="pane" id="pane-recipe" role="tabpanel" hidden>
+                <h4>Lemon risotto</h4>
+                <div class="bars"><b style="width:70%"></b><b></b><b style="width:85%"></b><b></b><b style="width:50%"></b></div>
+                <div class="note dotted" style="--note:var(--pink)">Half the butter. Double the lemon zest. 18 minutes, not 25.</div>
+              </div>
+              <div class="pane" id="pane-bank" role="tabpanel" hidden>
+                <h4>Your accounts</h4>
+                <div class="bars"><b></b><b style="width:75%"></b><b style="width:90%"></b><b style="width:65%"></b></div>
+                <p class="empty">No note on this page, so nothing gets in your way.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption>Click the tabs. Each page has its own note.</figcaption>
+      </figure>
+    </div>
+
+    <div class="feature">
+      <div>
+        <h3>It stays with its window</h3>
+        <dl>
+          <dt>Follows along</dt>
+          <dd>Move the window and the note moves with it, staying in the same corner where you left it.</dd>
+          <dt>There when the window is</dt>
+          <dd>The note stays on its window while you work in other apps, and steps aside only when something else covers it. Your desktop stays empty.</dd>
+          <dt>Never lost</dt>
+          <dd>A note can't be dragged off its window. On a small window it shrinks to fit, and grows back when the window does.</dd>
+        </dl>
+      </div>
+      <div>
+        <h3>Small and quiet</h3>
+        <dl>
+          <dt>Lives in the menu bar</dt>
+          <dd>No Dock icon and no window of its own. A pin in the menu bar is all you see until you need it.</dd>
+          <dt>Updates itself</dt>
+          <dd>Tack checks for a new version once a day and asks before installing it. Your notes are left alone.</dd>
+          <dt>Yours</dt>
+          <dd>Free, open source, and your notes are stored on your Mac.</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="feature">
+      <div>
+        <h3>Pleasant to write in</h3>
+        <dl>
+          <dt>Formatting as you type</dt>
+          <dd>Type <kbd>**bold**</kbd>, a <kbd>#</kbd> heading or a <kbd>-</kbd> list and it is formatted on the spot. There is no toolbar and no symbols are left behind.</dd>
+          <dt>Checklists</dt>
+          <dd>Type <kbd>[]</kbd> for a checkbox, then click it to tick things off.</dd>
+          <dt>Four colours, three typefaces</dt>
+          <dd>Both are picked from a small dot in the note's corner. Rest the pointer on a choice to preview it.</dd>
+          <dt>Gone when empty</dt>
+          <dd>Delete a note's text and the note removes itself. There is nothing to tidy up.</dd>
+        </dl>
+      </div>
+      <figure class="demo editor">
+        <div class="stage">
+          <div class="win">
+            <div class="bar"><i></i><i></i><i></i><span>totals.pdf</span></div>
+            <div class="body">
+              <div class="bars"><b style="width:60%;height:14px"></b><b></b><b style="width:85%"></b><b></b><b style="width:70%"></b><b></b><b style="width:90%"></b><b style="width:40%"></b></div>
+              <div class="note">
+                <div class="pill" role="group" aria-label="Typeface and colour">
+                  <button data-face="var(--sans)" aria-pressed="true" aria-label="Sans typeface">T</button>
+                  <button data-face="var(--serif)" aria-pressed="false" aria-label="Serif typeface" style="--f:var(--serif)">T</button>
+                  <button data-face="var(--mono)" aria-pressed="false" aria-label="Monospaced typeface" style="--f:var(--mono)">T</button>
+                  <hr>
+                  <button data-color="var(--yellow)" aria-pressed="true" aria-label="Yellow" style="--c:var(--yellow)"></button>
+                  <button data-color="var(--pink)" aria-pressed="false" aria-label="Pink" style="--c:var(--pink)"></button>
+                  <button data-color="var(--blue)" aria-pressed="false" aria-label="Blue" style="--c:var(--blue)"></button>
+                  <button data-color="var(--white)" aria-pressed="false" aria-label="White" style="--c:var(--white)"></button>
+                </div>
+                <h4>Before sending</h4>
+                <p><strong>Rename</strong> each file like <code>2026-05_client</code></p>
+                <ul><li>Check the totals</li><li>Export as PDF</li></ul>
+                <label><input type="checkbox" checked> March</label>
+                <label><input type="checkbox"> April</label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption>Change the typeface and the colour, tick a box.</figcaption>
+      </figure>
+    </div>
+
+    <div class="feature">
+      <div>
+        <h3>All your notes in one view</h3>
+        <dl>
+          <dt>Everything, grouped by place</dt>
+          <dd>Press <kbd>⌘O</kbd> and Tack shows every note you have, each under the folder, document or tab it is pinned to.</dd>
+          <dt>Edit right there</dt>
+          <dd>Change a note in this view and the one on its window keeps up as you type.</dd>
+          <dt>Jump back</dt>
+          <dd>A dot on each note brings its window, tab or folder back to the front.</dd>
+        </dl>
+      </div>
+      <figure class="demo board">
+        <div class="stage">
+          <div class="win">
+            <div class="bar"><i></i><i></i><i></i><span>Tack</span></div>
+            <div class="body">
+              <div>
+                <h4><svg><use href="#folder"/></svg>Invoices 2026</h4>
+                <div class="note dotted">Rename every file before sending them to Marta.</div>
+              </div>
+              <div>
+                <h4><svg><use href="#globe"/></svg>Flights to Lisbon</h4>
+                <div class="note dotted" style="--note:var(--blue)">Wait for Sara's dates before booking.</div>
+              </div>
+              <div>
+                <h4><svg><use href="#globe"/></svg>Lemon risotto</h4>
+                <div class="note dotted" style="--note:var(--pink)">Half the butter. Double the zest.</div>
+              </div>
+              <div>
+                <h4><svg><use href="#file"/></svg>totals.pdf</h4>
+                <div class="note dotted" style="--note:var(--white)">Page 3: the April figure is still a draft.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="band start">
+  <div class="wrap">
+    <h2>Your first note in a minute.</h2>
+    <ol>
+      <li>
+        <h3>Open Tack</h3>
+        <p>Download it, unzip it, then right-click the app and choose Open. Your Mac asks to let Tack see your windows and folders. Say yes and a pin appears in the menu bar.</p>
+      </li>
+      <li>
+        <h3>Go where the note belongs</h3>
+        <p>Click the folder, the document or the web page you want to leave a note on.</p>
+      </li>
+      <li>
+        <h3>Add the note</h3>
+        <p>Click the pin, choose Add note here, and type. Drag the note to the corner you like. That's it.</p>
+      </li>
+    </ol>
+    <div class="go">
+      <a class="button" href="https://github.com/elvisperlika/tack/releases/latest">Download Tack</a>
+      <span>Free and open source. For macOS 14 or later, on Apple silicon and Intel.</span>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Tack is released under the MIT license.</span>
+    <a href="https://github.com/elvisperlika/tack">Source code on GitHub<span class="stars" hidden></span></a>
+  </div>
+</footer>
+
+<script>
+// Drags `el` inside its offset parent and never lets it out: the same rule Tack applies to a note on its window.
+function drag(el, handle = el) {
+  let sx, sy, ox, oy;
+  const move = (x, y) => {
+    const p = el.offsetParent;
+    el.style.left = Math.max(0, Math.min(x, p.clientWidth - el.offsetWidth)) + 'px';
+    el.style.top = Math.max(0, Math.min(y, p.clientHeight - el.offsetHeight)) + 'px';
+  };
+  handle.addEventListener('pointerdown', e => {
+    e.stopPropagation();
+    handle.setPointerCapture(e.pointerId);
+    sx = e.clientX; sy = e.clientY; ox = el.offsetLeft; oy = el.offsetTop;
+  });
+  handle.addEventListener('pointermove', e => {
+    if (handle.hasPointerCapture(e.pointerId)) move(ox + e.clientX - sx, oy + e.clientY - sy);
+  });
+  handle.addEventListener('keydown', e => {
+    const d = { ArrowLeft: [-16, 0], ArrowRight: [16, 0], ArrowUp: [0, -16], ArrowDown: [0, 16] }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    e.stopPropagation();
+    move(el.offsetLeft + d[0], el.offsetTop + d[1]);
+  });
+}
+const win = document.getElementById('desk-window');
+drag(win, win.querySelector('.bar'));
+drag(document.getElementById('desk-note'));
+
+document.querySelectorAll('[role=tab]').forEach(tab => tab.addEventListener('click', () => {
+  const w = tab.closest('.win');
+  w.querySelectorAll('[role=tab]').forEach(t => t.setAttribute('aria-selected', t === tab));
+  w.querySelectorAll('.pane').forEach(p => p.hidden = p.id !== tab.getAttribute('aria-controls'));
+}));
+
+document.querySelectorAll('.pill button').forEach(b => b.addEventListener('click', () => {
+  const key = b.dataset.color ? 'color' : 'face';
+  b.closest('.note').style.setProperty(key === 'color' ? '--note' : '--face', b.dataset[key]);
+  b.parentNode.querySelectorAll(`[data-${key}]`).forEach(x => x.setAttribute('aria-pressed', x === b));
+}));
+
+// Star count from GitHub's public API. If the request fails or is rate-limited the count just stays hidden.
+fetch('https://api.github.com/repos/elvisperlika/tack')
+  .then(r => r.ok ? r.json() : Promise.reject())
+  .then(repo => document.querySelectorAll('.stars').forEach(s => {
+    s.textContent = '★ ' + repo.stargazers_count;
+    s.title = repo.stargazers_count + ' stars on GitHub';
+    s.hidden = false;
+  }))
+  .catch(() => {});
+</script>
+</body>
+</html>

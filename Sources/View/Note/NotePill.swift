@@ -18,6 +18,8 @@ final class NotePill: NSObject {
     /// A colour the user is hovering (`commit: false`) or has chosen (`true`).
     var onColor: (NSColor, Bool) -> Void = { _, _ in }
     var onDelete: () -> Void = {}
+    /// Whether deleting needs a second click: true turns the pill into Confirm / Cancel first.
+    var deleteNeedsConfirm: () -> Bool = { true }
     /// A pin level the user picked. The owner moves the note and reports back through
     /// `setPinLevels`, so a move that fails leaves the picker ringing the level it had.
     var onPin: (Int) -> Void = { _ in }
@@ -78,7 +80,8 @@ final class NotePill: NSObject {
 
     /// What the pill is showing. `.font` / `.color` / `.pin` are the picker: the pill widens and
     /// the resting dots give way to the choices, which is why this is a mode and not a bool.
-    private enum Mode { case closed, open, font, color, pin }
+    /// `.confirm` is the delete question, asked in the pill itself.
+    private enum Mode { case closed, open, font, color, pin, confirm }
     private var mode = Mode.closed
     private var choiceDots: [NSButton] = []  // the picker's dots, built per opening
     /// A hovered face or colour is showing on the note without being chosen. It stays up while
@@ -123,7 +126,7 @@ final class NotePill: NSObject {
     }
 
     private static func dotButton(index: Int, name: String) -> NSButton {
-        let b = NSButton(frame: dotFrame(index: index))
+        let b = HoverButton(frame: dotFrame(index: index))
         b.isBordered = false
         b.imagePosition = .imageOnly
         b.setAccessibilityLabel(name)
@@ -303,7 +306,7 @@ final class NotePill: NSObject {
         switch mode {
         case .closed: return []
         case .open: return restingDots
-        case .font, .color, .pin: return choiceDots
+        case .font, .color, .pin, .confirm: return choiceDots
         }
     }
 
@@ -312,13 +315,28 @@ final class NotePill: NSObject {
     ///
     /// The capsule grows leftwards (`maxX` fixed), so opening it pushes its left edge out and
     /// every dot's right edge stays put. That's what keeps the cursor on the dot it just opened.
+    /// Laid out by each button's own width: dots are all `dotSize`, the Confirm / Cancel words wider.
     private func layout() {
         let shown = shownDots()
-        for (i, dot) in shown.enumerated() { dot.animator().frame = Self.dotFrame(index: i) }
-        let width = shown.isEmpty ? Self.pillClosedSize.width : Self.pillSize(dots: shown.count).width
+        let (xs, width) = Self.row(shown)
+        for (dot, x) in zip(shown, xs) {
+            dot.animator().frame = NSRect(
+                x: x, y: Self.pillPad.height, width: dot.frame.width, height: Self.dotSize)
+        }
         let frame = view.frame
         view.animator().frame = NSRect(
             x: frame.maxX - width, y: frame.minY, width: width, height: frame.height)
+    }
+
+    /// Each dot's x inside the pill, and the pill's width around them.
+    private static func row(_ dots: [NSButton]) -> (xs: [CGFloat], width: CGFloat) {
+        var x = pillPad.width
+        var xs: [CGFloat] = []
+        for dot in dots {
+            xs.append(x)
+            x += dot.frame.width + dotGap
+        }
+        return (xs, dots.isEmpty ? pillClosedSize.width : x - dotGap + pillPad.width)
     }
 
     /// Move the pill to `mode`, growing it leftwards from its right edge so the corner it's
@@ -334,12 +352,23 @@ final class NotePill: NSObject {
         case .font: choiceDots = fontChoices()
         case .color: choiceDots = colorChoices()
         case .pin: choiceDots = pinDots()
+        case .confirm: choiceDots = confirmButtons()
         }
         choiceDots.forEach(view.addSubview)
         if mode == .open { refreshDots() }  // before they're shown, so they arrive current
 
         let shown = shownDots()
         let gone = spent + [fontDot, colorDot, pinDot, allDot, revealDot, settingsDot, backDot, deleteDot].filter { !shown.contains($0) }
+        // Dots that weren't on screen yet: the ones that fade in as the capsule opens.
+        let arriving = shown.filter { $0.isHidden || choiceDots.contains($0) }
+        // They start already where they'll end up on screen — offset by however far the left
+        // edge is about to travel — so they hold still while the capsule grows. Left at their old
+        // spot they slid under the cursor one after another, and each kept its hover zoom.
+        let (xs, width) = Self.row(shown)
+        let growth = width - view.frame.width
+        for (dot, x) in zip(shown, xs) where arriving.contains(dot) {
+            dot.setFrameOrigin(NSPoint(x: x - growth, y: Self.pillPad.height))
+        }
         shown.forEach { $0.isHidden = false }
         // Hide the outgoing dots now, not on completion: a delete dot lingering under the swatches
         // for the length of the animation is a note deleted by accident. Closing is the exception —
@@ -348,14 +377,48 @@ final class NotePill: NSObject {
 
         NSAnimationContext.runAnimationGroup(
             { ctx in
-                ctx.duration = animated ? 0.14 : 0
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                ctx.duration = animated ? Self.openDuration : 0
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 layout()
             },
             completionHandler: {
                 if mode == .closed { gone.forEach { $0.isHidden = true } }
                 spent.forEach { $0.removeFromSuperview() }
             })
+        if animated && mode != .closed { popIn(arriving) }
+    }
+
+    private static let openDuration: CFTimeInterval = 0.3
+
+    /// Once the capsule has finished growing, the arriving dots pop out of it all together:
+    /// each fades in while springing up from a smaller size about its own centre.
+    private func popIn(_ dots: [NSButton]) {
+        let start = CACurrentMediaTime() + Self.openDuration
+        for dot in dots {
+            guard let layer = dot.layer else { continue }  // HoverButtons are layer-backed once mounted
+            let c = CGPoint(x: dot.bounds.midX, y: dot.bounds.midY)
+            // Scaled about the centre: a view layer's anchor sits at its bottom-left corner.
+            var small = CATransform3DMakeTranslation(c.x, c.y, 0)
+            small = CATransform3DScale(small, 0.4, 0.4, 1)
+            small = CATransform3DTranslate(small, -c.x, -c.y, 0)
+
+            let grow = CASpringAnimation(keyPath: "transform")
+            grow.fromValue = small
+            grow.toValue = CATransform3DIdentity
+            grow.damping = 16
+            grow.stiffness = 220
+            grow.duration = grow.settlingDuration
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0
+            fade.toValue = 1
+            fade.duration = 0.18
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            for (key, anim) in [("arriveGrow", grow as CABasicAnimation), ("arriveFade", fade)] {
+                anim.beginTime = start
+                anim.fillMode = .backwards  // hidden and small until the capsule is open
+                layer.add(anim, forKey: key)
+            }
+        }
     }
 
     // MARK: - Pickers
@@ -399,18 +462,8 @@ final class NotePill: NSObject {
             b.image = Swatch.image(
                 hex: hex, size: Self.dotSize, radius: Self.dotSize / 2,
                 borderWidth: hex == styler.colorHex ? 2 : 1)
-            b.wantsLayer = true
-            b.onHover = { [weak self, weak b] inside in
-                guard let self, let layer = b?.layer else { return }
-                let target = inside ? CATransform3DMakeScale(1.1, 1.1, 1) : CATransform3DIdentity
-                let animation = CABasicAnimation(keyPath: "transform")
-                animation.fromValue = layer.presentation()?.transform ?? layer.transform
-                animation.toValue = target
-                animation.duration = 0.14
-                animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                layer.add(animation, forKey: "hoverScale")
-                layer.transform = target
-                guard inside else { return }  // leaving a dot keeps its preview
+            b.onHover = { [weak self] inside in
+                guard let self, inside else { return }  // leaving a dot keeps its preview
                 previewing = true
                 onColor(Swatch.color(fromHex: hex), false)
             }
@@ -433,6 +486,42 @@ final class NotePill: NSObject {
         }
     }
 
+    /// The delete question: a red Confirm and a plain Cancel. Cancel sits on the right, under
+    /// the cursor that just clicked the bin, so a double click can't delete by accident.
+    private func confirmButtons() -> [NSButton] {
+        [
+            Self.wordButton("Confirm", fill: Swatch.color(fromHex: Self.deleteHex), ink: .white,
+                            target: self, action: #selector(confirmDelete)),
+            Self.wordButton("Cancel", fill: NSColor.white.withAlphaComponent(0.75),
+                            ink: NSColor.black.withAlphaComponent(0.65),
+                            target: self, action: #selector(cancelDelete)),
+        ]
+    }
+
+    /// A capsule the height of a dot, holding a word instead of a glyph.
+    private static func wordButton(
+        _ title: String, fill: NSColor, ink: NSColor, target: AnyObject, action: Selector
+    ) -> NSButton {
+        let b = HoverButton()
+        b.hoverScale = 1.05  // a word is several dots wide: the dots' swell would balloon it
+        b.isBordered = false
+        b.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: ink])
+        b.frame = NSRect(
+            x: pillPad.width, y: pillPad.height,
+            width: ceil(b.attributedTitle.size().width) + 16, height: dotSize)
+        b.wantsLayer = true
+        b.layer?.backgroundColor = fill.cgColor
+        b.layer?.cornerRadius = dotSize / 2
+        b.layer?.borderColor = NSColor.black.withAlphaComponent(0.15).cgColor
+        b.layer?.borderWidth = 1
+        b.setAccessibilityLabel(title == "Confirm" ? "Confirm delete" : "Cancel delete")
+        b.target = target
+        b.action = action
+        return b
+    }
+
     // MARK: - Actions
 
     @objc private func pickFont() { set(.font) }
@@ -443,7 +532,14 @@ final class NotePill: NSObject {
         onPin(sender.tag)
         set(.open)
     }
-    @objc private func deleteTapped() { onDelete() }
+    @objc private func deleteTapped() {
+        if deleteNeedsConfirm() { set(.confirm) } else { onDelete() }
+    }
+    @objc private func confirmDelete() {
+        set(.closed, animated: false)  // the window is reused: the next note must not open on the question
+        onDelete()
+    }
+    @objc private func cancelDelete() { set(.open) }
     @objc private func openAll() { onOpenAll?() }
     @objc private func collapseTapped() { onCollapse() }
     @objc private func settingsTapped() { onSettings() }

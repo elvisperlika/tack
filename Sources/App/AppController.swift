@@ -375,10 +375,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The dashboard floats over everything: left up, it would hide the app it just brought
         // forward. It turns back into its note, and the poll shows that app's note as usual.
         grid.onReveal = { [weak self] in self?.closeDashboard() }
-        grid.onChange = { [weak self] in
-            guard let self, let host = dashboardNote else { return }
-            host.setDashboardColors(self.grid.colors)
-        }
         return grid
     }()
 
@@ -410,9 +406,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             host.showPage(onSettingsPage ? settingsPage : grid.view, settings: onSettingsPage)
         }
         onSettingsPage = false
-        host.expand(showing: grid.view, to: dashboardFrame(near: host.frame), color: Self.dashboardColor)
+        host.expand(showing: grid.view, to: dashboardFrame(near: host.frame, fromNote: host !== looseNote), color: Self.dashboardColor)
         dashboardNote = host
-        host.setDashboardColors(grid.colors)
     }
 
     func closeDashboard() {
@@ -425,30 +420,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private static let dashboardFrameKey = "dashboardFrame"
 
-    /// Where the dashboard opens: where it was last left, while that is still on a screen;
-    /// otherwise 760×560 in the middle of the screen `near` is on.
-    private func dashboardFrame(near: NSRect) -> NSRect {
-        if let saved = UserDefaults.standard.string(forKey: Self.dashboardFrameKey) {
-            let frame = NSRectFromString(saved)
-            if NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }) { return frame }
+    /// Where the dashboard opens: at the size it was last left (760×560 the first time),
+    /// centred on the note it grows from and held inside that note's screen. With no note to
+    /// grow from it returns to where it was last left, or the middle of the screen.
+    private func dashboardFrame(near: NSRect, fromNote: Bool) -> NSRect {
+        let saved = UserDefaults.standard.string(forKey: Self.dashboardFrameKey).map(NSRectFromString)
+        if !fromNote, let saved, NSScreen.screens.contains(where: { $0.visibleFrame.intersects(saved) }) {
+            return saved
         }
-        let screen = NSScreen.screens.first { $0.frame.intersects(near) } ?? NSScreen.main
+        let center = fromNote ? NSPoint(x: near.midX, y: near.midY) : nil
+        let screen =
+            NSScreen.screens.first { center.map($0.frame.contains) ?? $0.frame.intersects(near) }
+            ?? NSScreen.main
         let area = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let size = NSSize(width: min(760, area.width - 40), height: min(560, area.height - 40))
-        return NSRect(
-            x: area.midX - size.width / 2, y: area.midY - size.height / 2,
-            width: size.width, height: size.height)
+        let want = saved?.size ?? NSSize(width: 760, height: 560)
+        let size = NSSize(width: min(want.width, area.width - 40), height: min(want.height, area.height - 40))
+        let mid = center ?? NSPoint(x: area.midX, y: area.midY)
+        let (dx, dy) = Coord.clamp(
+            dx: mid.x - size.width / 2 - area.minX, dy: mid.y - size.height / 2 - area.minY,
+            note: size, window: area.size)
+        return NSRect(x: area.minX + dx, y: area.minY + dy, width: size.width, height: size.height)
     }
 
-    /// The dashboard's background, solid — what a growing note washes to. Read in the light
-    /// appearance the cards are always drawn in, so the two never clash.
-    private static var dashboardColor: NSColor {
-        var color = NSColor.windowBackgroundColor
-        NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
-            color = color.usingColorSpace(.sRGB) ?? color
-        }
-        return color
-    }
+    /// The dashboard's background, solid — what a growing note washes to: a neutral grey just
+    /// off white, so the notes' own colours are the only colour on screen.
+    private static let dashboardColor = Swatch.color(fromHex: "F5F5F5")
 
     func reportPersistenceError(_ error: Error) {
         let message = error.localizedDescription

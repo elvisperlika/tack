@@ -6,10 +6,6 @@
 
 Sticky notes that stick to windows, not your desktop.
 
-<p align="center">
-  <img src="images/example2.png" alt="A note pinned to a Finder folder" width="800">
-</p>
-
 Tack is a small macOS menu-bar app. Pin a note to a Finder folder or to any app window: the note follows that window as it moves, stays inside its bounds, and stays on it when you switch to another app, stepping aside only while another window covers it.
 
 A Finder note is saved as a hidden `.tack.json` inside the folder, so it travels with the folder when you move or copy it. Every other note lives in a central store keyed to the window, or to the tab in Chrome/Safari/Arc (by URL) and Terminal (by tty), so each tab can carry its own.
@@ -62,23 +58,9 @@ Notes edit in blocks, the way Notion does. Every line is a block, Enter opens th
 
 Type `**bold**`, `*italic*`, `` `code` ``, `~~strike~~` or a `#`/`##`/`###` heading and the markup is consumed: you see the formatting, not the symbols, even while editing. ⌘B and ⌘I toggle emphasis, and backspace at the start of a heading turns it back into body text. `- ` becomes a bullet (•) and `[]`/`[x]` a checkbox (☐/☑) you can click to tick. On disk a note is plain markdown.
 
-<p align="center">
-  <img src="images/example4.png" alt="Headings, bullets and checkboxes in a folder note" width="49%">
-  <img src="images/example1.png" alt="Bold, monospaced code and strikethrough in a note on a PDF window" width="49%">
-</p>
-
 A small glass dot sits in the note's top-right corner. Put the cursor on it and it opens leftwards into a pill of dots, floating over the blurred text, and closes again when the cursor leaves. The first dot is a T in the note's typeface, the second wears its colour: click either and the pill widens into the choices, three faces (the system sans, New York serif, mono) or the palette's colours (yellow, pink, blue, white). Rest on a choice and the note previews it until you pick one or move the cursor off the pill. A picker stays up once opened; clicking the card drops it. The third dot wears where the note is pinned and lets you change it: this window or this app, plus this tab in Chrome/Safari/Arc and Terminal. It only appears when there's a choice to make, since Finder notes live in the folder itself and have no levels. The stack dot opens every note (below), and the red bin deletes the note, asking first when it has text.
 
-<p align="center">
-  <img src="images/example3.png" alt="A note in a different typeface and colour" width="800">
-</p>
-
 Click the stack dot in a note's pill, or 📌 → Open Tack (⌘O), and the note lets go of its window and grows into a dashboard of every note, each card under the window, tab or folder it's pinned to. The cards are live: edit one here or on its own window and the other keeps up as you type. A card's pill has a dot that brings its window, tab or folder back to the front. The dashboard's own pill turns it back into the note, which shrinks home onto its window.
-
-<p align="center">
-  <img src="images/video.gif" alt="Editing a note in the Tack window and on its Finder folder at the same time" width="800">
-  <img src="images/example5.png" alt="The Tack window showing every note, grouped by where it lives" width="800">
-</p>
 
 ## Development
 
