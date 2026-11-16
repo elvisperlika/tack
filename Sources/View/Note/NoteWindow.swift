@@ -343,7 +343,10 @@ final class NoteWindow: NSObject, NSWindowDelegate {
                 current.animator().alphaValue = 0
                 page.animator().alphaValue = 1
             },
-            completionHandler: {
+            completionHandler: { [weak self] in
+                // A second click inside the fade may have brought this page straight back: then
+                // it is the one showing, and taking it down would leave the dashboard blank.
+                guard self?.dashboard?.content !== current else { return }
                 current.removeFromSuperview()
                 current.alphaValue = 1  // ready for the next time it is shown
             })
