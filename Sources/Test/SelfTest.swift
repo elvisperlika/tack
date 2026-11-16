@@ -46,6 +46,8 @@ enum SelfTest {
         emptyNoteSurvivesItsOwnSave()
         updateVersions()
         updateReleaseParsing()
+        releaseNotesListing()
+        releaseNotesOpenOnce()
         treePathIsRemembered()
         notePreferencesPalette()
         fontFaces()
@@ -127,6 +129,36 @@ enum SelfTest {
             "a tty is a path, not a page — Terminal just comes forward")
         assert(Container.revealTarget(for: ghost + "|Draft") == .app, "a window note just raises its app")
         assert(Container.revealTarget(for: ghost) == .app, "an app note raises its app")
+    }
+
+    static func releaseNotesListing() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for (name, text) in [
+            ("1.9.0.md", "nine"), ("1.11.0.md", "eleven"), ("1.10.0.md", "ten"),
+            ("next.md", "x"), ("README.md", "x"), ("notes.txt", "x"),
+        ] {
+            try! text.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        let all = ReleaseNotes.all(in: dir)
+        assert(all.map(\.version) == ["1.11.0", "1.10.0", "1.9.0"], "versions sort as numbers, strays are skipped")
+        assert(all.first?.text == "eleven", "a release carries its file's text")
+        assert(ReleaseNotes.all(in: dir.appendingPathComponent("missing")).isEmpty, "no folder, no releases")
+        assert(ReleaseNotes.all(in: nil).isEmpty, "no bundle folder, no releases")
+    }
+
+    static func releaseNotesOpenOnce() {
+        let r = [Release(version: "1.11.0", text: "x")]
+        assert(ReleaseNotes.shouldOpen(installed: "1.11.0", lastOpened: "1.10.0", available: r), "a new version with notes opens")
+        assert(ReleaseNotes.shouldOpen(installed: "1.11.0", lastOpened: nil, available: r), "a fresh install opens too")
+        assert(!ReleaseNotes.shouldOpen(installed: "1.11.0", lastOpened: "1.11.0", available: r), "only once per version")
+        assert(!ReleaseNotes.shouldOpen(installed: "1.11.1", lastOpened: "1.11.0", available: r), "a version without a file opens nothing")
+        let suite = UserDefaults(suiteName: "tack.selftest.\(UUID().uuidString)")!
+        let prefs = NotePreferences(defaults: suite)
+        assert(prefs.lastOpenedVersion == nil, "unset at first")
+        prefs.lastOpenedVersion = "1.11.0"
+        assert(prefs.lastOpenedVersion == "1.11.0", "the last opened version persists")
     }
 
     static func appNotesRoundTrip() {
