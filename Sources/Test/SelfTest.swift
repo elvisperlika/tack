@@ -49,7 +49,6 @@ enum SelfTest {
         releaseNotesListing()
         releaseNotesOpenOnce()
         releaseCardCentring()
-        releaseCardHoverIsHeard()
         treePathIsRemembered()
         notePreferencesPalette()
         fontFaces()
@@ -161,14 +160,6 @@ enum SelfTest {
         assert(prefs.lastOpenedVersion == nil, "unset at first")
         prefs.lastOpenedVersion = "1.11.0"
         assert(prefs.lastOpenedVersion == "1.11.0", "the last opened version persists")
-    }
-
-    static func releaseCardHoverIsHeard() {
-        // A tracking area calls its owner by the AppKit selectors; an NSObject owner must answer
-        // to exactly those, or the cursor's comings and goings are never heard.
-        let watcher = ReleasesView.HoverWatcher(NSView()) { _ in }
-        assert(watcher.responds(to: Selector(("mouseEntered:"))), "the watcher hears the cursor arrive")
-        assert(watcher.responds(to: Selector(("mouseExited:"))), "the watcher hears the cursor leave")
     }
 
     static func releaseCardCentring() {

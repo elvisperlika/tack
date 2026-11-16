@@ -246,8 +246,7 @@ final class NotePill: NSObject {
                 // asked: it stays up until it's answered, or until a click on the card drops it —
                 // but whatever it was previewing goes back.
                 endPreview()
-                // A reader's arrows follow the card, not the pill: its owner closes them.
-                if mode == .open && !isReader { set(.closed) }
+                if mode == .open { set(.closed) }
             } else if mode == .closed {
                 set(.open)
             }
@@ -257,10 +256,6 @@ final class NotePill: NSObject {
 
     /// The picker's way out: a click anywhere on the card drops whatever is open.
     func close() { set(.closed) }
-
-    /// Show the resting dots without waiting for the cursor to reach the pill — a reader's
-    /// arrows come up as soon as the cursor is on its card.
-    func open() { if mode == .closed { set(.open) } }
 
     /// The window is reused between notes: never arrive already open.
     func reset() { set(.closed, animated: false) }
