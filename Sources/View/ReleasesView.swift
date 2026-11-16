@@ -120,7 +120,7 @@ final class ReleasesView: NSObject {
     }
 
     /// Reports the cursor entering and leaving a view, even while Tack is in the background.
-    private final class HoverWatcher: NSObject {
+    final class HoverWatcher: NSObject {
         private let onHover: (Bool) -> Void
 
         init(_ view: NSView, onHover: @escaping (Bool) -> Void) {
@@ -132,8 +132,10 @@ final class ReleasesView: NSObject {
                     owner: self))
         }
 
-        @objc func mouseEntered(with event: NSEvent) { onHover(true) }
-        @objc func mouseExited(with event: NSEvent) { onHover(false) }
+        // Named by hand: on a plain NSObject Swift would export mouseEnteredWithEvent:, and the
+        // tracking area calls mouseEntered: — the NSResponder spelling.
+        @objc(mouseEntered:) func mouseEntered(with event: NSEvent) { onHover(true) }
+        @objc(mouseExited:) func mouseExited(with event: NSEvent) { onHover(false) }
     }
 
     /// Top-down and centred, one card per row, with room above the first and below the last
