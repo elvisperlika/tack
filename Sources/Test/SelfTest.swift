@@ -28,6 +28,7 @@ enum SelfTest {
         windowPicking()
         rearrangingIsDetected()
         genericKeyMatchesLegacyFormat()
+        genericIdentityFallsBackToTitle()
         levelLabels()
         debouncerCollapses()
         trackingBacksOff()
@@ -572,6 +573,15 @@ extension SelfTest {
         assert(
             Container.key(path: ["com.foo.Bar", "Untitled 1"], level: 1) == legacy,
             "generic key drifted from the legacy format — existing notes would orphan")
+    }
+
+    static func genericIdentityFallsBackToTitle() {
+        let id = GenericAppContainer.identity
+        assert(id("file:///a.pdf", "a.pdf") == "file:///a.pdf", "a document wins over the title")
+        assert(id(nil, "Settings") == "Settings", "no document → the title")
+        // Electron apps such as Notion report an empty AXDocument instead of none.
+        assert(id("", "My page") == "My page", "an empty document must fall back to the title")
+        assert(id("", "") == nil && id(nil, nil) == nil, "nothing to name the window by → no container")
     }
 
     static func levelLabels() {
