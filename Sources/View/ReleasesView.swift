@@ -39,7 +39,8 @@ final class ReleasesView: NSObject {
 
     private static func card(for release: Release) -> NoteCard {
         let card = NoteCard(size: NSSize(width: cardWidth, height: 200), blending: .withinWindow)
-        card.load(Note(text: release.text, dx: 0, dy: 0))
+        // Always the palette's yellow, whatever colour new notes start in: what's new reads as a post-it.
+        card.load(Note(text: release.text, dx: 0, dy: 0, color: "FFEB73"))
         card.pill.view.isHidden = true
         let text = card.editor.textView
         text.isEditable = false
