@@ -12,8 +12,10 @@ final class ReleasesView: NSObject {
     private static let gap: CGFloat = 16
     private static let glideDuration: TimeInterval = 0.4
 
-    /// Kept alive by the page: a NoteCard owns the wiring its view relies on.
+    /// Kept alive by the page: a NoteCard owns the wiring its view relies on, and a tracking
+    /// area holds its owner only weakly.
     private var cards: [NoteCard] = []
+    private var watchers: [HoverWatcher] = []
 
     override init() {
         view = FocusScrollView(frame: NSRect(x: 0, y: 0, width: 760, height: 520))
@@ -38,6 +40,16 @@ final class ReleasesView: NSObject {
             card.pill.isReader = true
             // One release has nowhere to move to: an empty pill would be a dead end.
             card.pill.view.isHidden = releases.count == 1
+            // The arrows show only while the cursor is on the card; at rest the card is bare.
+            card.pill.view.alphaValue = 0
+            let pill = card.pill
+            watchers.append(HoverWatcher(card.view) { inside in
+                if inside { pill.open() } else { pill.close() }
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.15
+                    pill.view.animator().alphaValue = inside ? 1 : 0
+                }
+            })
             cards.append(card)
             column.addSubview(card.view)
         }
@@ -105,6 +117,23 @@ final class ReleasesView: NSObject {
         label.isSelectable = false
         label.sizeToFit()
         return label
+    }
+
+    /// Reports the cursor entering and leaving a view, even while Tack is in the background.
+    private final class HoverWatcher: NSObject {
+        private let onHover: (Bool) -> Void
+
+        init(_ view: NSView, onHover: @escaping (Bool) -> Void) {
+            self.onHover = onHover
+            super.init()
+            view.addTrackingArea(
+                NSTrackingArea(
+                    rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                    owner: self))
+        }
+
+        @objc func mouseEntered(with event: NSEvent) { onHover(true) }
+        @objc func mouseExited(with event: NSEvent) { onHover(false) }
     }
 
     /// Top-down and centred, one card per row, with room above the first and below the last
