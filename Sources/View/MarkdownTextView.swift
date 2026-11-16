@@ -113,6 +113,25 @@ final class MarkdownTextView: NSTextView {
         return NSRect(x: 2, y: box.minY + origin.y - 2, width: bounds.width - 4, height: box.height + 4)
     }
 
+    // MARK: - Cursor
+
+    // Tracking areas ignore what sits on top, so under the pill the text view kept answering
+    // moves with its I-beam and the pill's cursor flickered. Leave the cursor to whatever
+    // view actually is under the mouse.
+    override func mouseMoved(with event: NSEvent) {
+        if isUnderMouse(event) { super.mouseMoved(with: event) }
+    }
+    override func cursorUpdate(with event: NSEvent) {
+        if isUnderMouse(event) { super.cursorUpdate(with: event) }
+    }
+
+    private func isUnderMouse(_ event: NSEvent) -> Bool {
+        guard let root = window?.contentView,
+            let hit = root.hitTest(root.convert(event.locationInWindow, from: nil))
+        else { return true }
+        return hit.isDescendant(of: self)
+    }
+
     // MARK: - Checkboxes
 
     override func mouseDown(with event: NSEvent) {

@@ -73,6 +73,8 @@ class HoverButton: NSButton {
 final class HoverPill: NSVisualEffectView {
     var onHover: ((Bool) -> Void)?
 
+    // Cursor rects only apply in the key window, and Tack is rarely active: this one covers
+    // the pill after a click into the note; the tracking area below covers every other time.
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .arrow)
     }
@@ -82,11 +84,17 @@ final class HoverPill: NSVisualEffectView {
         trackingAreas.forEach(removeTrackingArea)
         addTrackingArea(
             NSTrackingArea(
-                rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
                 owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    // Without this the app underneath keeps its cursor over the pill — Preview's I-beam, say.
+    // Re-set on every move too: the cursor can enter from the card's text, still an I-beam.
+    override func mouseMoved(with event: NSEvent) { NSCursor.arrow.set() }
+    override func mouseEntered(with event: NSEvent) {
+        NSCursor.arrow.set()
+        onHover?(true)
+    }
     override func mouseExited(with event: NSEvent) { onHover?(false) }
 }
 

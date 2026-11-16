@@ -172,17 +172,19 @@ extension Container {
     /// without opening anything.
     enum RevealTarget: Equatable {
         case folder(String)  // a Finder window on this path
-        case url(URL)  // this page, in the browser the note was written on
+        case url(URL)  // this page or document, in the app the note was written on
         case app  // just bring the app forward
     }
 
     static func revealTarget(for key: String) -> RevealTarget {
         let parts = key.components(separatedBy: "|")
         if parts[0] == FinderContainer.bundleID, parts.count > 1 { return .folder(parts[1]) }
-        // The finest component is a URL only for browser tabs; a Terminal tty also starts with
-        // a slash, which is why this tests the scheme rather than the shape.
+        // The finest component is a URL for browser tabs and for documents (AXDocument); a
+        // Terminal tty also starts with a slash, which is why this tests the scheme rather than
+        // the shape. A directory URL is a terminal's working folder: opening it would spawn a
+        // new terminal window, so that app just comes forward.
         if let last = parts.dropFirst().last, let url = URL(string: last),
-            url.scheme?.hasPrefix("http") == true {
+            url.scheme?.hasPrefix("http") == true || (url.isFileURL && !url.hasDirectoryPath) {
             return .url(url)
         }
         return .app
@@ -206,8 +208,8 @@ extension Container {
     /// Bring the surface a note belongs to back to the front. The note follows on its own: the
     /// poll notices the focus change and shows whatever is pinned there.
     ///
-    /// ponytail: a browser gets the URL (its own tab if it already has one, a new tab if not)
-    /// and everything else just comes forward — picking a particular window or Terminal tab
+    /// ponytail: a browser gets the URL (its own tab if it already has one, a new tab if not),
+    /// a document app gets its file, and everything else just comes forward — picking a particular window or Terminal tab
     /// needs AX or an Apple event per app. Add that if landing on the wrong one starts to sting.
     @discardableResult static func reveal(key: String) -> Bool {
         let bundleID = key.components(separatedBy: "|")[0]

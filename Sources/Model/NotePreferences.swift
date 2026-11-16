@@ -53,6 +53,16 @@ final class NotePreferences {
         defaults.set(list, forKey: Self.paletteKey)
     }
 
+    // MARK: - Release notes
+
+    private static let lastOpenedKey = "lastOpenedVersion"
+
+    /// The version Tack last launched as — what tells a first launch of a new release apart.
+    var lastOpenedVersion: String? {
+        get { defaults.string(forKey: Self.lastOpenedKey) }
+        set { defaults.set(newValue, forKey: Self.lastOpenedKey) }
+    }
+
     // MARK: - Finder notes
 
     // ponytail: Finder notes live in a .tack.json inside their own folder, with no index

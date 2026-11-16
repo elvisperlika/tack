@@ -68,6 +68,7 @@ final class NoteWindow: NSObject, NSWindowDelegate {
         card.pill.onOpenAll = { [weak self] in self?.onOpenAll?() }
         card.pill.onCollapse = { [weak self] in self?.onCollapse?() }
         card.pill.onSettings = { [weak self] in self?.onSettings?() }
+        card.pill.onReleases = { [weak self] in self?.onReleases?() }
         card.onPress = { [weak self] in
             if self?.isExpanded == true { self?.onDashboardPress?() }  // the strip, the glass edge
         }
@@ -255,6 +256,8 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     var onDashboardPress: (() -> Void)?
     /// The pill's settings dot: the owner decides which page to show next.
     var onSettings: (() -> Void)?
+    /// The pill's what's-new dot: the owner decides which page to show next.
+    var onReleases: (() -> Void)?
     /// The pill's way back from the dashboard: the owner collapses it (and saves what it must first).
     var onCollapse: (() -> Void)?
     /// An edit to this note from a dashboard cell, held until the note is a note again — loading
@@ -264,7 +267,7 @@ final class NoteWindow: NSObject, NSWindowDelegate {
     /// The note becomes the Tack dashboard: it lets go of its window, grows into `frame` while
     /// its colour washes over to `color` and its words fade, and `content` — every note — fades
     /// in once it has arrived. A window with no note up starts as a small card in the middle.
-    func expand(showing content: NSView, to frame: NSRect, color: NSColor) {
+    func expand(showing content: NSView, as kind: DashboardPage = .notes, to frame: NSRect, color: NSColor) {
         guard !isExpanded else { return }
         lifting = true  // the tracker and the delegate keep their hands off the frame from here
         let home = window.frame
@@ -296,7 +299,7 @@ final class NoteWindow: NSObject, NSWindowDelegate {
             },
             completionHandler: { [weak self] in
                 guard let self else { return }
-                mount(content)
+                mount(content, as: kind)
                 NSApp.activate(ignoringOtherApps: true)
                 window.makeKeyAndOrderFront(nil)
             })
@@ -304,7 +307,7 @@ final class NoteWindow: NSObject, NSWindowDelegate {
 
     /// Lay the dashboard into the card: the grid, under a strip that drags the window. The pill
     /// stays in the strip's corner — the same glass to hover — now offering the way back.
-    private func mount(_ content: NSView) {
+    private func mount(_ content: NSView, as kind: DashboardPage) {
         let bounds = card.view.bounds
         // The whole card: a page that scrolls (the grid) runs up under the strip and fades there;
         // one that doesn't (settings) just centres in it.
@@ -314,7 +317,7 @@ final class NoteWindow: NSObject, NSWindowDelegate {
         // strip above the grid would be typing into the hidden note.
         card.editor.view.isHidden = true
         card.pill.isDashboard = true
-        card.pill.showingSettings = false  // a dashboard always opens on its notes
+        card.pill.page = kind
         content.alphaValue = 0
         card.view.addSubview(content, positioned: .below, relativeTo: card.pill.view)
         NSAnimationContext.runAnimationGroup { ctx in
@@ -324,23 +327,26 @@ final class NoteWindow: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Swap what the dashboard shows — its notes, or the settings page — with a cross-fade, in
-    /// the same place. `settings` tells the pill which page is now up.
-    func showPage(_ page: NSView, settings: Bool) {
+    /// Swap what the dashboard shows — its notes, settings or release notes — with a cross-fade,
+    /// in the same place. `kind` tells the pill which page is now up.
+    func showPage(_ page: NSView, as kind: DashboardPage) {
         guard let current = dashboard?.content, current !== page, !collapsing else { return }
         page.frame = current.frame
         page.autoresizingMask = [.width, .height]
         page.alphaValue = 0
         card.view.addSubview(page, positioned: .below, relativeTo: card.pill.view)
         dashboard?.content = page
-        card.pill.showingSettings = settings
+        card.pill.page = kind
         NSAnimationContext.runAnimationGroup(
             { ctx in
                 ctx.duration = Self.contentFade
                 current.animator().alphaValue = 0
                 page.animator().alphaValue = 1
             },
-            completionHandler: {
+            completionHandler: { [weak self] in
+                // A second click inside the fade may have brought this page straight back: then
+                // it is the one showing, and taking it down would leave the dashboard blank.
+                guard self?.dashboard?.content !== current else { return }
                 current.removeFromSuperview()
                 current.alphaValue = 1  // ready for the next time it is shown
             })

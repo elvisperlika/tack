@@ -24,6 +24,8 @@ VERSION="${VERSION:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION="${VERSION:-0.0.0}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" \
   -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
+# The what's-new notes, one releases/<version>.md per release: the dashboard reads them from here.
+[ -d releases ] && cp -R releases "$APP/Contents/Resources/"
 # icon.png is the bare artwork at any size; macOS wants it 824x824 centred in a
 # 1024 canvas, or the icon reads bigger than every neighbour in the Dock.
 # `sips -c` grows the canvas with transparent padding; -z then downscales per slot.

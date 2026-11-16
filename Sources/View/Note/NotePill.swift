@@ -9,6 +9,9 @@ import AppKit
 /// It reads `styler` to know what is currently chosen (which dot to wear, which choice to ring)
 /// but never writes to it: a pick, and the live preview a hover shows, both leave through
 /// `onFont` / `onColor`, so the assembler stays the one place that decides what choosing means.
+/// The dashboard's pages, which its pill switches between.
+enum DashboardPage { case notes, settings, releases }
+
 final class NotePill: NSObject {
     /// The capsule to mount in the note's card.
     let view: HoverPill
@@ -38,17 +41,37 @@ final class NotePill: NSObject {
     var onCollapse: () -> Void = {}
     /// Switch the dashboard between every note and the settings page.
     var onSettings: () -> Void = {}
+    /// Switch the dashboard between every note and the release notes.
+    var onReleases: () -> Void = {}
 
-    /// Which dashboard page is up: the settings dot wears a gear on the notes page and the stack
-    /// of notes on the settings page — always the way to the *other* one.
-    var showingSettings = false {
+    /// Which dashboard page is up. A page's dot wears the stack of notes while its page is up —
+    /// the way back — and its own symbol everywhere else.
+    var page = DashboardPage.notes {
         didSet {
-            settingsDot.image = Self.symbolDot(showingSettings ? "rectangle.stack.fill" : "gearshape.fill")
-            let name = showingSettings ? "All notes" : "Settings"
-            settingsDot.toolTip = name
-            settingsDot.setAccessibilityLabel(name)
+            Self.dress(settingsDot, home: page == .settings, symbol: "gearshape.fill", name: "Settings")
+            Self.dress(releasesDot, home: page == .releases, symbol: "sparkles", name: "What's New")
         }
     }
+
+    private static func dress(_ dot: NSButton, home: Bool, symbol: String, name: String) {
+        dot.image = symbolDot(home ? "rectangle.stack.fill" : symbol)
+        let label = home ? "All notes" : name
+        dot.toolTip = label
+        dot.setAccessibilityLabel(label)
+    }
+
+    /// A note to read, not to edit — a release note: the pill offers only the way to the note
+    /// above and the one below, each when there is one. Set the two moves first.
+    var isReader = false {
+        didSet {
+            guard isReader != oldValue else { return }
+            reset()
+            for (i, dot) in restingDots.enumerated() { dot.frame = Self.dotFrame(index: i) }
+        }
+    }
+    /// Move to the note above or below. nil hides that arrow: there is none that way.
+    var onUp: (() -> Void)?
+    var onDown: (() -> Void)?
 
     /// The note is the dashboard: the pill keeps its place and its glass, but offers what the
     /// dashboard does rather than what a note does.
@@ -70,6 +93,9 @@ final class NotePill: NSObject {
     private let allDot: NSButton  // a stack of notes; opens the Tack window on all of them
     private let backDot: NSButton  // the dashboard's way back to the note
     private let settingsDot: NSButton  // the dashboard's switch between its notes and settings
+    private let releasesDot: NSButton  // the dashboard's switch between its notes and what's new
+    private let upDot: NSButton  // a reader's way to the note above
+    private let downDot: NSButton  // a reader's way to the note below
     private let revealDot: NSButton  // a dashboard card's way to the app it lives on
     private let deleteDot: NSButton  // red: deletes the note
 
@@ -167,6 +193,12 @@ final class NotePill: NSObject {
         revealDot.image = Self.symbolDot("arrow.up.forward.app.fill")
         settingsDot = Self.dotButton(index: 0, name: "Settings")
         settingsDot.image = Self.symbolDot("gearshape.fill")
+        releasesDot = Self.dotButton(index: 0, name: "What's New")
+        releasesDot.image = Self.symbolDot("sparkles")
+        upDot = Self.dotButton(index: 0, name: "Previous note")
+        upDot.image = Self.symbolDot("arrow.up")
+        downDot = Self.dotButton(index: 1, name: "Next note")
+        downDot.image = Self.symbolDot("arrow.down")
         backDot = Self.dotButton(index: 0, name: "Back to the note")
         backDot.image = Self.symbolDot("arrow.down.right.and.arrow.up.left")
         deleteDot = Self.dotButton(index: 2, name: "Delete note")
@@ -176,7 +208,7 @@ final class NotePill: NSObject {
 
         // One click is the whole gesture for each. Hidden until the pill opens — the clip only
         // hides them from view, and a dot outside the closed pill would still take clicks.
-        for dot in [fontDot, colorDot, pinDot, allDot, revealDot, settingsDot, backDot, deleteDot] {
+        for dot in [fontDot, colorDot, pinDot, allDot, revealDot, releasesDot, settingsDot, backDot, upDot, downDot, deleteDot] {
             dot.isHidden = true
             view.addSubview(dot)
         }
@@ -184,6 +216,12 @@ final class NotePill: NSObject {
         backDot.action = #selector(collapseTapped)
         settingsDot.target = self
         settingsDot.action = #selector(settingsTapped)
+        releasesDot.target = self
+        releasesDot.action = #selector(releasesTapped)
+        upDot.target = self
+        upDot.action = #selector(upTapped)
+        downDot.target = self
+        downDot.action = #selector(downTapped)
         revealDot.target = self
         revealDot.action = #selector(revealTapped)
         allDot.target = self
@@ -251,7 +289,8 @@ final class NotePill: NSObject {
     /// The dots the open pill shows at rest. Laid out by position in this list, so the delete
     /// dot simply sits one place further left of the corner when the pin dot is there.
     private var restingDots: [NSButton] {
-        if isDashboard { return [settingsDot, backDot] }
+        if isDashboard { return [releasesDot, settingsDot, backDot] }
+        if isReader { return (onUp != nil ? [upDot] : []) + (onDown != nil ? [downDot] : []) }
         return [fontDot, colorDot] + (pinChoices.count > 1 ? [pinDot] : [])
             + (onOpenAll != nil ? [allDot] : []) + (onReveal != nil ? [revealDot] : []) + [deleteDot]
     }
@@ -358,7 +397,7 @@ final class NotePill: NSObject {
         if mode == .open { refreshDots() }  // before they're shown, so they arrive current
 
         let shown = shownDots()
-        let gone = spent + [fontDot, colorDot, pinDot, allDot, revealDot, settingsDot, backDot, deleteDot].filter { !shown.contains($0) }
+        let gone = spent + [fontDot, colorDot, pinDot, allDot, revealDot, releasesDot, settingsDot, backDot, upDot, downDot, deleteDot].filter { !shown.contains($0) }
         // Dots that weren't on screen yet: the ones that fade in as the capsule opens.
         let arriving = shown.filter { $0.isHidden || choiceDots.contains($0) }
         // They start already where they'll end up on screen — offset by however far the left
@@ -543,6 +582,9 @@ final class NotePill: NSObject {
     @objc private func openAll() { onOpenAll?() }
     @objc private func collapseTapped() { onCollapse() }
     @objc private func settingsTapped() { onSettings() }
+    @objc private func releasesTapped() { onReleases() }
+    @objc private func upTapped() { onUp?() }
+    @objc private func downTapped() { onDown?() }
     @objc private func revealTapped() { onReveal?() }
 
     @objc private func fontChosen(_ sender: NSButton) {

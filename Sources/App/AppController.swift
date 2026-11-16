@@ -50,6 +50,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pollTimer?.tolerance = 0.1  // lets macOS line this wake-up up with others
         updater.start()
 
+        // The first launch of a release with a what's-new note opens it. The version is
+        // remembered either way, so a later launch of the same one stays quiet.
+        let installed = Updater.installedVersion
+        let releases = ReleaseNotes.all(in: ReleaseNotes.folder)
+        let prefs = NotePreferences.shared
+        if ReleaseNotes.shouldOpen(installed: installed, lastOpened: prefs.lastOpenedVersion, available: releases) {
+            DispatchQueue.main.async { [weak self] in self?.openDashboard(from: nil, page: .releases) }
+        }
+        prefs.lastOpenedVersion = installed
+
         // A note outlives its app's focus now, so nothing else would ever take it down when the
         // app quits: its window just vanishes from the list and the note would wait for it forever.
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -380,16 +390,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The note that is the dashboard right now, if one is.
     private weak var dashboardNote: NoteWindow?
-    /// The dashboard's other page, built the first time it is asked for.
+    /// The dashboard's other pages, each built the first time it is asked for.
     private lazy var settingsPage = SettingsView()
-    private var onSettingsPage = false
+    private lazy var releasesPage = ReleasesView()
+    private var dashboardPage = DashboardPage.notes
 
     /// Becomes the dashboard when it is opened from the menu bar with no note on screen to grow.
     private lazy var looseNote = NoteWindow()
 
     /// `note` becomes the dashboard — or, from the menu bar, the note of the app in front, or a
     /// bare card when that app shows none. A dashboard already up just comes forward.
-    func openDashboard(from note: NoteWindow?) {
+    func openDashboard(from note: NoteWindow?, page: DashboardPage = .notes) {
         if let current = dashboardNote, current.isExpanded {
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -400,14 +411,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         grid.reload()
         host.onCollapse = { [weak self] in self?.closeDashboard() }
         host.onDashboardPress = { [weak self] in self?.grid.unfocus() }
+        // Each dot goes to its page, or back to the notes from it.
         host.onSettings = { [weak self, weak host] in
             guard let self, let host else { return }
-            onSettingsPage.toggle()
-            host.showPage(onSettingsPage ? settingsPage : grid.view, settings: onSettingsPage)
+            show(dashboardPage == .settings ? .notes : .settings, on: host)
         }
-        onSettingsPage = false
-        host.expand(showing: grid.view, to: dashboardFrame(near: host.frame, fromNote: host !== looseNote), color: Self.dashboardColor)
+        host.onReleases = { [weak self, weak host] in
+            guard let self, let host else { return }
+            show(dashboardPage == .releases ? .notes : .releases, on: host)
+        }
+        dashboardPage = page
+        host.expand(
+            showing: view(for: page), as: page,
+            to: dashboardFrame(near: host.frame, fromNote: host !== looseNote), color: Self.dashboardColor)
         dashboardNote = host
+    }
+
+    private func show(_ page: DashboardPage, on host: NoteWindow) {
+        dashboardPage = page
+        host.showPage(view(for: page), as: page)
+    }
+
+    private func view(for page: DashboardPage) -> NSView {
+        switch page {
+        case .notes: grid.view
+        case .settings: settingsPage
+        case .releases: releasesPage.view
+        }
     }
 
     func closeDashboard() {

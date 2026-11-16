@@ -14,14 +14,21 @@ class GenericAppContainer: Container {
 
     init?(app: NSRunningApplication) {
         guard let win = AXWindows.focusedWindow(pid: app.processIdentifier),
-            let id = AXWindows.string(win, kAXDocumentAttribute)
-                ?? AXWindows.string(win, kAXTitleAttribute),
-            !id.isEmpty
+            let id = Self.identity(
+                document: AXWindows.string(win, kAXDocumentAttribute),
+                title: AXWindows.string(win, kAXTitleAttribute))
         else { return nil }
         self.bundleID = app.bundleIdentifier ?? app.localizedName ?? "app"
         self.pid = app.processIdentifier
         self.ident = id
         self.window = WindowServer.window(of: app.processIdentifier)?.number
+    }
+
+    /// The window's identity: its document, else its title. Electron apps (Notion, Slack, VS
+    /// Code) answer AXDocument with an empty string rather than an error, so an empty document
+    /// must fall through to the title too — or the app gets no container and no note at all.
+    static func identity(document: String?, title: String?) -> String? {
+        [document, title].lazy.compactMap { $0 }.first { !$0.isEmpty }
     }
 
     override var path: [String] { [bundleID, ident] }

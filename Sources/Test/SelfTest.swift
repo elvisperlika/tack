@@ -28,6 +28,7 @@ enum SelfTest {
         windowPicking()
         rearrangingIsDetected()
         genericKeyMatchesLegacyFormat()
+        genericIdentityFallsBackToTitle()
         levelLabels()
         debouncerCollapses()
         trackingBacksOff()
@@ -46,6 +47,9 @@ enum SelfTest {
         emptyNoteSurvivesItsOwnSave()
         updateVersions()
         updateReleaseParsing()
+        releaseNotesListing()
+        releaseNotesOpenOnce()
+        releaseCardCentring()
         treePathIsRemembered()
         notePreferencesPalette()
         fontFaces()
@@ -118,10 +122,57 @@ enum SelfTest {
             "a Finder note opens its folder")
         assert(Container.revealTarget(for: "com.google.Chrome|title|https://example.com/page")
             == .url(URL(string: "https://example.com/page")!), "a tab note opens its page")
+        let pdf = "file:///Users/me/My%20Paper%20(1).pdf"
+        assert(Container.revealTarget(for: "com.apple.Preview|" + pdf) == .url(URL(string: pdf)!),
+            "a document note opens its document")
+        assert(Container.revealTarget(for: "com.mitchellh.ghostty|file:///Users/me/Projects/") == .app,
+            "a terminal's working folder is not opened — that would spawn a window")
         assert(Container.revealTarget(for: "com.apple.Terminal|/dev/ttys003") == .app,
             "a tty is a path, not a page — Terminal just comes forward")
         assert(Container.revealTarget(for: ghost + "|Draft") == .app, "a window note just raises its app")
         assert(Container.revealTarget(for: ghost) == .app, "an app note raises its app")
+    }
+
+    static func releaseNotesListing() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for (name, text) in [
+            ("1.9.0.md", "nine"), ("1.11.0.md", "eleven"), ("1.10.0.md", "ten"),
+            ("next.md", "x"), ("README.md", "x"), ("notes.txt", "x"),
+        ] {
+            try! text.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        let all = ReleaseNotes.all(in: dir)
+        assert(all.map(\.version) == ["1.11.0", "1.10.0", "1.9.0"], "versions sort as numbers, strays are skipped")
+        assert(all.first?.text == "eleven", "a release carries its file's text")
+        assert(ReleaseNotes.all(in: dir.appendingPathComponent("missing")).isEmpty, "no folder, no releases")
+        assert(ReleaseNotes.all(in: nil).isEmpty, "no bundle folder, no releases")
+    }
+
+    static func releaseNotesOpenOnce() {
+        let r = [Release(version: "1.11.0", text: "x")]
+        assert(ReleaseNotes.shouldOpen(installed: "1.11.0", lastOpened: "1.10.0", available: r), "a new version with notes opens")
+        assert(ReleaseNotes.shouldOpen(installed: "1.11.0", lastOpened: nil, available: r), "a fresh install opens too")
+        assert(!ReleaseNotes.shouldOpen(installed: "1.11.0", lastOpened: "1.11.0", available: r), "only once per version")
+        assert(!ReleaseNotes.shouldOpen(installed: "1.11.1", lastOpened: "1.11.0", available: r), "a version without a file opens nothing")
+        let suite = UserDefaults(suiteName: "tack.selftest.\(UUID().uuidString)")!
+        let prefs = NotePreferences(defaults: suite)
+        assert(prefs.lastOpenedVersion == nil, "unset at first")
+        prefs.lastOpenedVersion = "1.11.0"
+        assert(prefs.lastOpenedVersion == "1.11.0", "the last opened version persists")
+    }
+
+    static func releaseCardCentring() {
+        // A 400pt viewport, and the page can scroll from 0 to 432.
+        func centre(_ card: ClosedRange<CGFloat>) -> CGFloat {
+            ReleasesView.centredOffset(card: card, viewport: 400, limits: 0...432)
+        }
+        assert(centre(316...516) == 216, "a card is centred in the page")
+        assert(centre(100...300) == 0, "the first card is centred by the room above it")
+        assert(centre(532...732) == 432, "the last card is centred by the room below it")
+        assert(centre(10...110) == 0, "never above the top of the page")
+        assert(centre(316...1016) == 316, "a card taller than the page lines up its top, so its title shows")
     }
 
     static func appNotesRoundTrip() {
@@ -522,6 +573,15 @@ extension SelfTest {
         assert(
             Container.key(path: ["com.foo.Bar", "Untitled 1"], level: 1) == legacy,
             "generic key drifted from the legacy format — existing notes would orphan")
+    }
+
+    static func genericIdentityFallsBackToTitle() {
+        let id = GenericAppContainer.identity
+        assert(id("file:///a.pdf", "a.pdf") == "file:///a.pdf", "a document wins over the title")
+        assert(id(nil, "Settings") == "Settings", "no document → the title")
+        // Electron apps such as Notion report an empty AXDocument instead of none.
+        assert(id("", "My page") == "My page", "an empty document must fall back to the title")
+        assert(id("", "") == nil && id(nil, nil) == nil, "nothing to name the window by → no container")
     }
 
     static func levelLabels() {
