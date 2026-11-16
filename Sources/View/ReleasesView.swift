@@ -57,6 +57,9 @@ final class ReleasesView: NSObject {
         let target = Self.centredOffset(
             card: frame.minY...frame.maxY, viewport: viewport, limits: 0...max(0, column.frame.height - viewport))
         guard abs(target - offset) > 0.5 else { return }
+        // The card slides out from under a still cursor, and a still cursor sends no exit: left
+        // alone, the pill just clicked would stay open on a card that has moved on.
+        cards.forEach { $0.pill.close() }
         let clip = view.contentView
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = Self.glideDuration
