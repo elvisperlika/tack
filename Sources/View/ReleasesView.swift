@@ -40,15 +40,10 @@ final class ReleasesView: NSObject {
             card.pill.isReader = true
             // One release has nowhere to move to: an empty pill would be a dead end.
             card.pill.view.isHidden = releases.count == 1
-            // The arrows show only while the cursor is on the card; at rest the card is bare.
-            card.pill.view.alphaValue = 0
+            // The pill rests as a bare glass dot; its arrows open while the cursor is on the card.
             let pill = card.pill
             watchers.append(HoverWatcher(card.view) { inside in
                 if inside { pill.open() } else { pill.close() }
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.15
-                    pill.view.animator().alphaValue = inside ? 1 : 0
-                }
             })
             cards.append(card)
             column.addSubview(card.view)
