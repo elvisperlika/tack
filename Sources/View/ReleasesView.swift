@@ -58,8 +58,9 @@ final class ReleasesView: NSObject {
             card: frame.minY...frame.maxY, viewport: viewport, limits: 0...max(0, column.frame.height - viewport))
         guard abs(target - offset) > 0.5 else { return }
         // The card slides out from under a still cursor, and a still cursor sends no exit: left
-        // alone, the pill just clicked would stay open on a card that has moved on.
-        cards.forEach { $0.pill.close() }
+        // alone, the pill just clicked would stay open on a card that has moved on. Closed at
+        // once: the page's own glide cut an animated close short and left the capsule wide.
+        cards.forEach { $0.pill.reset() }
         let clip = view.contentView
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = Self.glideDuration
