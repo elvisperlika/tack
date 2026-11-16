@@ -118,6 +118,11 @@ enum SelfTest {
             "a Finder note opens its folder")
         assert(Container.revealTarget(for: "com.google.Chrome|title|https://example.com/page")
             == .url(URL(string: "https://example.com/page")!), "a tab note opens its page")
+        let pdf = "file:///Users/me/My%20Paper%20(1).pdf"
+        assert(Container.revealTarget(for: "com.apple.Preview|" + pdf) == .url(URL(string: pdf)!),
+            "a document note opens its document")
+        assert(Container.revealTarget(for: "com.mitchellh.ghostty|file:///Users/me/Projects/") == .app,
+            "a terminal's working folder is not opened — that would spawn a window")
         assert(Container.revealTarget(for: "com.apple.Terminal|/dev/ttys003") == .app,
             "a tty is a path, not a page — Terminal just comes forward")
         assert(Container.revealTarget(for: ghost + "|Draft") == .app, "a window note just raises its app")
