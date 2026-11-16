@@ -65,6 +65,11 @@ jobs:
             fi
           fi
 
+          # A feature release should say what's new; it still ships without, just with a warning.
+          if [ "${MAJOR:-0}" -eq 1 ] || [ "${MINOR:-0}" -eq 1 ]; then
+            [ -f "releases/${TAG#v}.md" ] || echo "::warning::No releases/${TAG#v}.md: this release ships without a what's-new note"
+          fi
+
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git tag "$TAG" -m "$TAG"
