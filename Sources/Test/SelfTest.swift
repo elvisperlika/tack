@@ -48,6 +48,7 @@ enum SelfTest {
         updateReleaseParsing()
         releaseNotesListing()
         releaseNotesOpenOnce()
+        releaseCardSnapping()
         treePathIsRemembered()
         notePreferencesPalette()
         fontFaces()
@@ -159,6 +160,23 @@ enum SelfTest {
         assert(prefs.lastOpenedVersion == nil, "unset at first")
         prefs.lastOpenedVersion = "1.11.0"
         assert(prefs.lastOpenedVersion == "1.11.0", "the last opened version persists")
+    }
+
+    static func releaseCardSnapping() {
+        // Three 200pt cards, 16pt apart; a 400pt viewport, so a centred card has 100pt above it.
+        let cards: [ClosedRange<CGFloat>] = [100...300, 316...516, 532...732]
+        func snap(_ start: CGFloat, _ end: CGFloat) -> CGFloat {
+            ReleasesView.snapOffset(cards: cards, viewport: 400, limits: 0...432, from: start, to: end)
+        }
+        assert(snap(0, 0) == 0, "the first card is already centred")
+        assert(snap(0, 30) == 216, "a short swipe down still moves on to the next card")
+        assert(snap(216, 190) == 0, "a short swipe up goes back to the previous card")
+        assert(snap(0, 400) == 432, "a long swipe lands on the card nearest the middle")
+        assert(snap(432, 460) == 432, "past the last card there is nowhere further to go")
+        assert(snap(216, 218) == 216, "a nudge of a couple of points stays put")
+        let tall: [ClosedRange<CGFloat>] = [100...300, 316...1016]
+        assert(ReleasesView.snapOffset(cards: tall, viewport: 400, limits: 0...700, from: 0, to: 40) == 316,
+            "a card taller than the page lines up its top, so its title shows")
     }
 
     static func appNotesRoundTrip() {
